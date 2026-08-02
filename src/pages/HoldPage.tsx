@@ -3,6 +3,7 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
 import { RackGrid } from '../components/RackGrid';
+import { can } from '../rbac';
 
 const HOLD_REASONS = [
   'Quality defects',
@@ -26,9 +27,7 @@ export function HoldPage() {
   const [palletId, setPalletId] = useState<string | null>(null);
   const [reason, setReason] = useState(HOLD_REASONS[0]);
 
-  const isApprover = currentUser
-    ? (['Manager', 'HOD', 'Director'] as const).includes(currentUser.role as never)
-    : false;
+  const isApprover = can(currentUser?.role, 'approve:hold');
 
   function handleScanPallet(id: string) {
     const pallet = pallets.find((p) => p.id === id);

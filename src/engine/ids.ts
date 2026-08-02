@@ -14,6 +14,7 @@ export const generateRecallCaseId = () => next('RECALL');
 export const generateApprovalId = () => next('APPROVAL');
 export const generateDriverConfirmationId = () => next('DRVCONF');
 export const generateSyncTaskId = () => next('SYNC');
+export const generateVehicleLabelId = () => next('VEH');
 
 export const generateBatchId = (productionOrderId: string) =>
   `BATCH-${productionOrderId}`;

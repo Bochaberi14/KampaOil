@@ -1,4 +1,4 @@
-export type Role = 'Operator' | 'Picker' | 'Manager' | 'HOD' | 'Director';
+export type Role = 'Picker' | 'Manager' | 'HOD' | 'Director' | 'Clerk';
 
 export interface User {
   id: string;
@@ -102,6 +102,9 @@ export interface Truck {
   status: 'Waiting' | 'Loading' | 'Dispatched';
   salesOrderId: string | null;
   dispatchLine: string;
+  // Printed once per sales-order loading — the operator scans THIS, not the
+  // truck ID, per spec §18 ("temporary dispatch barcode... attached to the vehicle").
+  tempDispatchBarcode: string | null;
 }
 
 export interface SalesOrder {
@@ -153,7 +156,8 @@ export interface PickTask {
   salesOrderId: string;
   origin: 'Storage' | 'Bay-Topup';
   items: PickTaskItem[];
-  status: 'Pending' | 'InProgress' | 'Completed';
+  status: 'PendingAcceptance' | 'Accepted' | 'Completed';
+  assignedPickerId: string | null;
   createdAt: string;
 }
 

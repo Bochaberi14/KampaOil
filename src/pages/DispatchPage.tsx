@@ -3,15 +3,18 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
 import { BayRackCard, TruckCard } from '../components/EntityCards';
+import { can } from '../rbac';
 
-type WizardStep = 'bay' | 'pallet' | 'truck';
+type WizardStep = 'bay' | 'pallet' | 'label' | 'truck';
 
-const APPROVER_ROLES = ['Manager', 'HOD', 'Director'];
+type DirectWizardStep = 'pallet' | 'label' | 'truck';
 
 export function DispatchPage() {
   const salesOrders = useWarehouseStore((s) => s.salesOrders);
   const bayRacks = useWarehouseStore((s) => s.bayRacks);
   const trucks = useWarehouseStore((s) => s.trucks);
+  const pallets = useWarehouseStore((s) => s.pallets);
+  const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const manifests = useWarehouseStore((s) => s.manifests);
   const driverConfirmations = useWarehouseStore((s) => s.driverConfirmations);
   const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
@@ -20,7 +23,9 @@ export function DispatchPage() {
   const approveDirectDispatchRequest = useWarehouseStore((s) => s.approveDirectDispatchRequest);
   const rejectDirectDispatchRequest = useWarehouseStore((s) => s.rejectDirectDispatchRequest);
   const signDriverConfirmation = useWarehouseStore((s) => s.signDriverConfirmation);
+  const printVehicleLabel = useWarehouseStore((s) => s.printVehicleLabel);
   const scanDispatch = useWarehouseStore((s) => s.scanDispatch);
+  const scanDirectDispatch = useWarehouseStore((s) => s.scanDirectDispatch);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
@@ -30,6 +35,10 @@ export function DispatchPage() {
     bayRackId: string | null;
     palletId: string | null;
   }>({ step: 'bay', bayRackId: null, palletId: null });
+  const [directWizard, setDirectWizard] = useState<{ step: DirectWizardStep; palletId: string | null }>({
+    step: 'pallet',
+    palletId: null,
+  });
   const [confirmForms, setConfirmForms] = useState<
     Record<string, { driverName: string; driverSigned: boolean; supervisorSigned: boolean }>
   >({});
@@ -38,6 +47,25 @@ export function DispatchPage() {
   const remaining = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
   const available = selectedSO ? availableOnBay(selectedSO.sku) : 0;
   const shortfall = selectedSO ? Math.max(0, remaining - available) : 0;
+
+  // Pallets an approved direct-dispatch shortfall already released straight
+  // to the dispatch area (bypassing the bay) — ready to load onto a truck.
+  const readyForDirectDispatch = selectedSO
+    ? pickTasks
+        .filter((t) => t.origin === 'Bay-Topup' && t.salesOrderId === selectedSO.id)
+        .flatMap((t) => t.items)
+        .map((i) => i.palletId)
+        .filter((palletId) => pallets.find((p) => p.id === palletId)?.status === 'InTransitToTruck')
+    : [];
+
+  // Once a label is printed for this sales order's truck, reuse the same
+  // barcode for every remaining pallet instead of printing a new one each time.
+  const labeledTruck = selectedSO
+    ? trucks.find((t) => t.salesOrderId === selectedSO.id && t.tempDispatchBarcode)
+    : undefined;
+  const availableTrucks = selectedSO
+    ? trucks.filter((t) => !t.salesOrderId || t.salesOrderId === selectedSO.id)
+    : [];
 
   function handleScanBay(bayRackId: string) {
     const bayRack = bayRacks.find((b) => b.id === bayRackId);
@@ -55,16 +83,27 @@ export function DispatchPage() {
       pushToast(`Pallet ${palletId} does not match bay rack ${wizard.bayRackId} — scan rejected`, 'error');
       return;
     }
-    setWizard({ ...wizard, step: 'truck', palletId });
+    setWizard({ ...wizard, step: labeledTruck ? 'truck' : 'label', palletId });
   }
 
-  function handleScanTruck(truckId: string) {
+  function handlePrintLabel(truckId: string, target: 'normal' | 'direct') {
+    if (!selectedSO || !currentUser) return;
+    const result = printVehicleLabel(truckId, selectedSO.id, currentUser.id);
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+      return;
+    }
+    if (target === 'normal') setWizard((w) => ({ ...w, step: 'truck' }));
+    else setDirectWizard((w) => ({ ...w, step: 'truck' }));
+  }
+
+  function handleScanTruck(vehicleBarcode: string) {
     if (!wizard.bayRackId || !wizard.palletId || !currentUser || !selectedSO) return;
     const result = scanDispatch({
       salesOrderId: selectedSO.id,
       bayRackId: wizard.bayRackId,
       palletId: wizard.palletId,
-      truckId,
+      vehicleBarcode,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
@@ -72,6 +111,32 @@ export function DispatchPage() {
       return;
     }
     setWizard({ step: 'bay', bayRackId: null, palletId: null });
+    if (result.data.fulfilled) {
+      pushToast(`Sales order ${selectedSO.id} fully dispatched — manifest generated`, 'success');
+    }
+  }
+
+  function handleDirectScanPallet(palletId: string) {
+    if (!readyForDirectDispatch.includes(palletId)) {
+      pushToast(`Pallet ${palletId} is not ready for direct dispatch — scan rejected`, 'error');
+      return;
+    }
+    setDirectWizard({ step: labeledTruck ? 'truck' : 'label', palletId });
+  }
+
+  function handleDirectScanTruck(vehicleBarcode: string) {
+    if (!directWizard.palletId || !currentUser || !selectedSO) return;
+    const result = scanDirectDispatch({
+      salesOrderId: selectedSO.id,
+      palletId: directWizard.palletId,
+      vehicleBarcode,
+      operatorId: currentUser.id,
+    });
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+      return;
+    }
+    setDirectWizard({ step: 'pallet', palletId: null });
     if (result.data.fulfilled) {
       pushToast(`Sales order ${selectedSO.id} fully dispatched — manifest generated`, 'success');
     }
@@ -90,7 +155,7 @@ export function DispatchPage() {
       return;
     }
     pushToast(
-      `Pick task ${result.data.task.id} created from Storage — complete it on the Loading Bay screen`,
+      `Pick task ${result.data.task.id} created from Storage — a Picker must accept and release it on the Storage screen before it arrives on the Loading Bay`,
       'info',
     );
   }
@@ -167,18 +232,24 @@ export function DispatchPage() {
                   const pendingApproval = directDispatchApprovals.find(
                     (a) => a.salesOrderId === selectedSO.id && a.status === 'PendingApproval',
                   );
-                  const isApprover = currentUser ? APPROVER_ROLES.includes(currentUser.role) : false;
+                  const isApprover = can(currentUser?.role, 'approve:directDispatch');
+
+                  const canRequest = can(currentUser?.role, 'execute:scan');
 
                   if (!pendingApproval) {
                     return (
                       <div className="flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2 text-amber-300">
                         <span>Bay is short by {shortfall.toLocaleString()} units</span>
-                        <button
-                          onClick={handleRequestApproval}
-                          className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500"
-                        >
-                          Request direct-dispatch approval
-                        </button>
+                        {canRequest ? (
+                          <button
+                            onClick={handleRequestApproval}
+                            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500"
+                          >
+                            Request direct-dispatch approval
+                          </button>
+                        ) : (
+                          <span className="text-xs">{currentUser?.role ?? 'This role'} cannot request this — requires Picker</span>
+                        )}
                       </div>
                     );
                   }
@@ -186,8 +257,9 @@ export function DispatchPage() {
                   return (
                     <div className="space-y-2 rounded-lg bg-amber-500/10 px-3 py-2 text-amber-300">
                       <div>
-                        Direct dispatch requested — {pendingApproval.shortfallQty.toLocaleString()} units
-                        from Storage, bypassing the bay.
+                        Direct dispatch requested — {pendingApproval.shortfallQty.toLocaleString()} extra units
+                        from Storage. Once approved, a Picker must still accept, release (Storage), and confirm
+                        arrival (Loading Bay) before these units are dispatchable.
                       </div>
                       {isApprover ? (
                         <div className="flex gap-2">
@@ -217,7 +289,12 @@ export function DispatchPage() {
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="font-semibold text-slate-200">Dispatch wizard</h2>
           {!selectedSO && <p className="text-sm text-slate-500">Select a sales order to begin.</p>}
-          {selectedSO && selectedSO.status !== 'Fulfilled' && (
+          {selectedSO && !can(currentUser?.role, 'execute:scan') && selectedSO.status !== 'Fulfilled' && (
+            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
+            </p>
+          )}
+          {selectedSO && can(currentUser?.role, 'execute:scan') && selectedSO.status !== 'Fulfilled' && (
             <>
               {wizard.step === 'bay' && (
                 <ScanInput
@@ -235,14 +312,31 @@ export function DispatchPage() {
                   suggestions={wizard.bayRackId ? [bayRacks.find((b) => b.id === wizard.bayRackId)?.palletId ?? ''] : []}
                 />
               )}
+              {wizard.step === 'label' && (
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-300">
+                    Print a temporary dispatch barcode and attach it to a vehicle before scanning.
+                  </p>
+                  {availableTrucks.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => handlePrintLabel(t.id, 'normal')}
+                      className="flex w-full items-center justify-between rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+                    >
+                      <span>
+                        {t.id} <span className="text-slate-500">({t.dispatchLine})</span>
+                      </span>
+                      <span className="text-xs font-medium text-indigo-400">Print label</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {wizard.step === 'truck' && (
                 <ScanInput
-                  label="Scan truck"
-                  placeholder="e.g. TRK-100"
+                  label="Scan the temporary vehicle barcode"
+                  placeholder="e.g. VEH-ab12cd"
                   onScan={handleScanTruck}
-                  suggestions={trucks
-                    .filter((t) => !t.salesOrderId || t.salesOrderId === selectedSO.id)
-                    .map((t) => t.id)}
+                  suggestions={labeledTruck?.tempDispatchBarcode ? [labeledTruck.tempDispatchBarcode] : []}
                 />
               )}
             </>
@@ -251,6 +345,63 @@ export function DispatchPage() {
             <p className="text-sm text-emerald-400">This sales order has been fully dispatched.</p>
           )}
         </div>
+
+        {selectedSO && readyForDirectDispatch.length > 0 && (
+          <div className="space-y-4 rounded-2xl border border-violet-800 bg-violet-950/20 p-6 lg:col-span-2">
+            <div>
+              <h2 className="font-semibold text-violet-200">
+                Direct dispatch — bypassing the loading bay
+              </h2>
+              <p className="text-xs text-violet-300/80">
+                These pallets came from an approved shortfall and were released straight to the
+                dispatch area — scan pallet, then truck, without a bay rack.
+              </p>
+            </div>
+            {!can(currentUser?.role, 'execute:scan') ? (
+              <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
+              </p>
+            ) : (
+              <>
+                {directWizard.step === 'pallet' && (
+                  <ScanInput
+                    label="Scan pallet ready for direct dispatch"
+                    placeholder="e.g. PLT-005"
+                    onScan={handleDirectScanPallet}
+                    suggestions={readyForDirectDispatch}
+                  />
+                )}
+                {directWizard.step === 'label' && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-violet-100">
+                      Print a temporary dispatch barcode and attach it to a vehicle before scanning.
+                    </p>
+                    {availableTrucks.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => handlePrintLabel(t.id, 'direct')}
+                        className="flex w-full items-center justify-between rounded-lg border border-violet-700 px-3 py-2 text-sm text-violet-100 hover:bg-violet-900/40"
+                      >
+                        <span>
+                          {t.id} <span className="text-violet-400">({t.dispatchLine})</span>
+                        </span>
+                        <span className="text-xs font-medium text-violet-300">Print label</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {directWizard.step === 'truck' && (
+                  <ScanInput
+                    label={`Scan the temporary vehicle barcode for pallet ${directWizard.palletId}`}
+                    placeholder="e.g. VEH-ab12cd"
+                    onScan={handleDirectScanTruck}
+                    suggestions={labeledTruck?.tempDispatchBarcode ? [labeledTruck.tempDispatchBarcode] : []}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div>
@@ -338,13 +489,20 @@ export function DispatchPage() {
                           />
                           Loading supervisor signature confirmed
                         </label>
-                        <button
-                          onClick={() => handleSignConfirmation(m.id)}
-                          disabled={!form.driverName.trim() || !form.driverSigned || !form.supervisorSigned}
-                          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
-                        >
-                          Generate & confirm
-                        </button>
+                        {can(currentUser?.role, 'sign:supervisor') ? (
+                          <button
+                            onClick={() => handleSignConfirmation(m.id)}
+                            disabled={!form.driverName.trim() || !form.driverSigned || !form.supervisorSigned}
+                            className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+                          >
+                            Generate & confirm
+                          </button>
+                        ) : (
+                          <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                            {currentUser?.role ?? 'This role'} cannot sign as loading supervisor — requires
+                            Manager, HOD, or Director.
+                          </p>
+                        )}
                       </div>
                     )}
 

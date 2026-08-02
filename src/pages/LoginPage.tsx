@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { USERS } from '../data/seed';
 import { useWarehouseStore } from '../store/useWarehouseStore';
+import { ROLE_BLURB } from '../rbac';
 
 export function LoginPage() {
   const login = useWarehouseStore((s) => s.login);
@@ -36,6 +37,7 @@ export function LoginPage() {
               <div>
                 <div className="font-semibold text-slate-100">{u.name}</div>
                 <div className="text-xs text-slate-500">{u.role}</div>
+                <div className="mt-0.5 text-xs text-slate-600">{ROLE_BLURB[u.role]}</div>
               </div>
               {pending === u.id ? (
                 <span className="text-xs text-indigo-400">Syncing with SAP…</span>

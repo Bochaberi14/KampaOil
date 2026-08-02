@@ -32,6 +32,8 @@ const STYLES: Record<string, string> = {
   Released: DONE,
   SentToRecall: MID,
   InProgress: PENDING_ACTION,
+  PendingAcceptance: PENDING_ACTION,
+  Accepted: MID,
   Inspection: PENDING_ACTION,
   Repacking: PENDING_ACTION,
   Relabelling: PENDING_ACTION,

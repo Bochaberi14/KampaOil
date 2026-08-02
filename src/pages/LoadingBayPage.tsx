@@ -1,19 +1,18 @@
 import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
-import { RackGrid } from '../components/RackGrid';
 import { BayRackCard } from '../components/EntityCards';
 import { StatusPill } from '../components/StatusPill';
+import { can } from '../rbac';
 
-type WizardStep = 'pallet' | 'rack' | 'bay';
+type WizardStep = 'pallet' | 'bay';
 
 export function LoadingBayPage() {
   const salesOrders = useWarehouseStore((s) => s.salesOrders);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
-  const racks = useWarehouseStore((s) => s.racks);
   const bayRacks = useWarehouseStore((s) => s.bayRacks);
+  const pallets = useWarehouseStore((s) => s.pallets);
   const requestPick = useWarehouseStore((s) => s.requestPick);
-  const scanRackForPick = useWarehouseStore((s) => s.scanRackForPick);
   const scanBayRackForPick = useWarehouseStore((s) => s.scanBayRackForPick);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
@@ -26,6 +25,11 @@ export function LoadingBayPage() {
 
   const openTasks = pickTasks.filter((t) => t.status !== 'Completed');
   const activeTask = openTasks.find((t) => t.id === activeTaskId) ?? null;
+  const arrivingPalletIds =
+    activeTask?.items
+      .filter((i) => !i.picked)
+      .map((i) => i.palletId)
+      .filter((id) => pallets.find((p) => p.id === id)?.status === 'InTransitToBay') ?? [];
 
   function handleRequestPick(soId: string) {
     const result = requestPick(soId);
@@ -34,37 +38,19 @@ export function LoadingBayPage() {
       return;
     }
     setActiveTaskId(result.data.task.id);
-    pushToast(`Pick task created — ${result.data.task.items.length} pallet(s), FIFO order`, 'success');
+    pushToast(
+      `Pick task created — ${result.data.task.items.length} pallet(s), FIFO order. Awaiting Picker acceptance in Storage.`,
+      'success',
+    );
   }
 
   function handleScanPallet(palletId: string) {
     if (!activeTask) return;
-    const item = activeTask.items.find((i) => i.palletId === palletId);
-    if (!item) {
-      pushToast(`Pallet ${palletId} is not part of this pick task — scan rejected`, 'error');
+    if (!arrivingPalletIds.includes(palletId)) {
+      pushToast(`Pallet ${palletId} is not currently in transit to this bay — scan rejected`, 'error');
       return;
     }
-    if (item.picked) {
-      pushToast(`Pallet ${palletId} has already been picked`, 'error');
-      return;
-    }
-    setWizard({ step: 'rack', palletId });
-  }
-
-  function handleScanRack(rackId: string) {
-    if (!activeTask || !wizard.palletId || !currentUser) return;
-    const result = scanRackForPick({
-      pickTaskId: activeTask.id,
-      palletId: wizard.palletId,
-      rackId,
-      operatorId: currentUser.id,
-    });
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-    pushToast(`Pallet ${wizard.palletId} picked — now scan a bay rack`, 'success');
-    setWizard({ step: 'bay', palletId: wizard.palletId });
+    setWizard({ step: 'bay', palletId });
   }
 
   function handleScanBay(bayRackId: string) {
@@ -86,8 +72,8 @@ export function LoadingBayPage() {
     }
   }
 
-  const unpickedPalletIds = activeTask?.items.filter((i) => !i.picked).map((i) => i.palletId) ?? [];
   const freeBayRackIds = bayRacks.filter((b) => !b.palletId).map((b) => b.id);
+  const isPicker = can(currentUser?.role, 'execute:scan');
 
   return (
     <div className="space-y-8">
@@ -113,7 +99,7 @@ export function LoadingBayPage() {
               </div>
               <div className="flex items-center gap-2">
                 <StatusPill status={so.status} />
-                {so.status === 'Pending' && (
+                {so.status === 'Pending' && isPicker && (
                   <button
                     onClick={() => handleRequestPick(so.id)}
                     className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
@@ -126,6 +112,10 @@ export function LoadingBayPage() {
           ))}
 
           <h2 className="pt-3 font-semibold text-slate-200">Active pick tasks</h2>
+          <p className="text-xs text-slate-500">
+            A request only creates the task — Storage must accept and release each pallet before it
+            arrives here.
+          </p>
           {openTasks.length === 0 && <p className="text-xs text-slate-500">None right now.</p>}
           {openTasks.map((t) => (
             <button
@@ -141,48 +131,61 @@ export function LoadingBayPage() {
               <span className="text-slate-200">
                 {t.id} <span className="text-slate-500">· {t.origin}</span> · for {t.salesOrderId}
               </span>
-              <span className="text-xs text-slate-500">
-                {t.items.filter((i) => i.picked).length}/{t.items.length} picked
-              </span>
+              <div className="flex items-center gap-2">
+                <StatusPill status={t.status} />
+                <span className="text-xs text-slate-500">
+                  {t.items.filter((i) => i.picked).length}/{t.items.length} arrived
+                </span>
+              </div>
             </button>
           ))}
         </div>
 
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="font-semibold text-slate-200">Picking wizard</h2>
+          <h2 className="font-semibold text-slate-200">Bay arrival wizard</h2>
           {!activeTask && (
-            <p className="text-sm text-slate-500">Select an active pick task to start scanning.</p>
+            <p className="text-sm text-slate-500">Select an active pick task to confirm arrivals.</p>
           )}
           {activeTask && (
             <>
               <ul className="space-y-1 text-xs">
-                {activeTask.items.map((item) => (
-                  <li key={item.palletId} className="flex items-center justify-between">
-                    <span className="font-mono text-slate-300">{item.palletId}</span>
-                    <span className={item.picked ? 'text-emerald-400' : 'text-slate-500'}>
-                      {item.picked ? 'On bay ✓' : `at ${item.sourceRackId}`}
-                    </span>
-                  </li>
-                ))}
+                {activeTask.items.map((item) => {
+                  const palletStatus = pallets.find((p) => p.id === item.palletId)?.status;
+                  const label = item.picked
+                    ? 'On bay ✓'
+                    : palletStatus === 'InTransitToBay'
+                      ? 'In transit — arriving'
+                      : `awaiting Storage release (at ${item.sourceRackId})`;
+                  return (
+                    <li key={item.palletId} className="flex items-center justify-between">
+                      <span className="font-mono text-slate-300">{item.palletId}</span>
+                      <span className={item.picked ? 'text-emerald-400' : 'text-slate-500'}>{label}</span>
+                    </li>
+                  );
+                })}
               </ul>
 
-              {wizard.step === 'pallet' && (
+              {activeTask.status === 'PendingAcceptance' && (
+                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                  Awaiting a Picker to accept this task on the Storage screen.
+                </p>
+              )}
+
+              {activeTask.status === 'Accepted' && arrivingPalletIds.length === 0 && (
+                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                  Accepted by the assigned Picker — waiting for pallets to be released from Storage.
+                </p>
+              )}
+
+              {isPicker && activeTask.status === 'Accepted' && arrivingPalletIds.length > 0 && wizard.step === 'pallet' && (
                 <ScanInput
-                  label="Scan pallet"
+                  label="Scan arriving pallet"
                   placeholder="e.g. PLT-005"
                   onScan={handleScanPallet}
-                  suggestions={unpickedPalletIds}
+                  suggestions={arrivingPalletIds}
                 />
               )}
-              {wizard.step === 'rack' && (
-                <ScanInput
-                  label={`Scan rack for pallet ${wizard.palletId}`}
-                  placeholder="e.g. R-A"
-                  onScan={handleScanRack}
-                  suggestions={racks.map((r) => r.id)}
-                />
-              )}
-              {wizard.step === 'bay' && (
+              {isPicker && wizard.step === 'bay' && (
                 <ScanInput
                   label={`Scan bay rack for pallet ${wizard.palletId}`}
                   placeholder="e.g. BAY-1"
@@ -192,17 +195,6 @@ export function LoadingBayPage() {
               )}
             </>
           )}
-        </div>
-      </div>
-
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Storage racks
-        </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {racks.map((rack) => (
-            <RackGrid key={rack.id} rack={rack} highlightPalletId={wizard.palletId ?? undefined} />
-          ))}
         </div>
       </div>
 

@@ -3,8 +3,10 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
 import { countFreeRackSlots, countRackedPallets } from '../engine/rules';
+import { ROLE_BLURB } from '../rbac';
 
 export function DashboardPage() {
+  const currentUser = useWarehouseStore((s) => s.currentUser);
   const pallets = useWarehouseStore((s) => s.pallets);
   const racks = useWarehouseStore((s) => s.racks);
   const trucks = useWarehouseStore((s) => s.trucks);
@@ -37,7 +39,7 @@ export function DashboardPage() {
     },
     {
       label: '3 · Loading Bay',
-      hint: 'Request a pick for a sales order, then scan pallet → rack → bay rack.',
+      hint: 'Request a pick for a sales order — Storage then accepts and releases it, and it arrives here.',
       to: '/loading-bay',
       done: pickTasks.some((t) => t.status === 'Completed'),
     },
@@ -70,11 +72,17 @@ export function DashboardPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-xl font-bold text-white">Manager Dashboard</h1>
+        <h1 className="text-xl font-bold text-white">Warehouse Dashboard</h1>
         <p className="text-sm text-slate-400">
           Live view across production, storage, loading bay, and dispatch.
           {sapSyncing && ' Syncing with SAP…'}
         </p>
+        {currentUser && (
+          <p className="mt-1 text-xs text-slate-500">
+            Signed in as <span className="text-slate-300">{currentUser.name}</span> ·{' '}
+            {currentUser.role} — {ROLE_BLURB[currentUser.role]}
+          </p>
+        )}
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">

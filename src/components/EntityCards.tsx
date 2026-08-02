@@ -26,6 +26,9 @@ export function TruckCard({ truck }: { truck: Truck }) {
         <div className="text-xs text-slate-500">
           {truck.plate} · {truck.dispatchLine}
         </div>
+        {truck.tempDispatchBarcode && (
+          <div className="mt-0.5 font-mono text-xs text-indigo-400">{truck.tempDispatchBarcode}</div>
+        )}
       </div>
       <StatusPill status={truck.status} />
     </div>

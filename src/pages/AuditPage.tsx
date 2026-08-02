@@ -2,9 +2,9 @@ import { useState, type ReactNode } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
-import { ageInHours, getRackedLoads, groupLoadsBy } from '../engine/audit';
-
-const APPROVER_ROLES = ['Manager', 'HOD', 'Director'];
+import { ageInHours, buildPalletJourney, getRackedLoads, groupLoadsBy } from '../engine/audit';
+import { USERS } from '../data/seed';
+import { can } from '../rbac';
 
 export function AuditPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
@@ -13,15 +13,29 @@ export function AuditPage() {
   const batches = useWarehouseStore((s) => s.batches);
   const holds = useWarehouseStore((s) => s.holds);
   const recallCases = useWarehouseStore((s) => s.recallCases);
+  const manifests = useWarehouseStore((s) => s.manifests);
+  const movements = useWarehouseStore((s) => s.movements);
   const syncQueue = useWarehouseStore((s) => s.syncQueue);
   const currentUser = useWarehouseStore((s) => s.currentUser);
-  const placeHold = useWarehouseStore((s) => s.placeHold);
+  const reportDiscrepancy = useWarehouseStore((s) => s.reportDiscrepancy);
   const pushToast = useWarehouseStore((s) => s.pushToast);
 
-  const [flagPalletId, setFlagPalletId] = useState<string | null>(null);
-  const [note, setNote] = useState('');
+  const [journeyPalletId, setJourneyPalletId] = useState<string | null>(null);
+  const journey = journeyPalletId
+    ? buildPalletJourney(journeyPalletId, { pallets, loads, batches, holds, recallCases, manifests, movements })
+    : null;
 
-  const isApprover = currentUser ? APPROVER_ROLES.includes(currentUser.role) : false;
+  function operatorName(userId: string) {
+    return USERS.find((u) => u.id === userId)?.name ?? userId;
+  }
+
+  const [verifyPalletId, setVerifyPalletId] = useState<string | null>(null);
+  const [verifyStep, setVerifyStep] = useState<'pallet' | 'rack'>('pallet');
+
+  const isClerk = can(currentUser?.role, 'report:discrepancy');
+  const verifyPallet = verifyPalletId ? (pallets.find((p) => p.id === verifyPalletId) ?? null) : null;
+  const expectedRackId =
+    verifyPallet && verifyPallet.location.type === 'Rack' ? verifyPallet.location.rackId : null;
   const rackedLoads = getRackedLoads(loads, pallets);
   const byProduct = groupLoadsBy(rackedLoads, (l) => l.sku, (l) => l.productName);
 
@@ -40,25 +54,44 @@ export function AuditPage() {
     Synced: syncQueue.filter((t) => t.status === 'Synced').length,
   };
 
-  function handleFlag() {
-    if (!flagPalletId || !currentUser) return;
-    if (!note.trim()) {
-      pushToast('Enter a note describing the discrepancy', 'error');
+  function handleVerifyScanPallet(id: string) {
+    const pallet = pallets.find((p) => p.id === id);
+    if (!pallet || pallet.status !== 'Racked') {
+      pushToast(`${id} is not currently racked`, 'error');
       return;
     }
-    const result = placeHold({
-      targetType: 'Pallet',
-      targetId: flagPalletId,
-      reason: `Inventory discrepancy — ${note.trim()}`,
+    setVerifyPalletId(id);
+    setVerifyStep('rack');
+  }
+
+  function handleVerifyScanRack(foundRackId: string) {
+    if (!verifyPalletId || !currentUser || !expectedRackId) return;
+    if (foundRackId === expectedRackId) {
+      pushToast(`${verifyPalletId} verified at ${expectedRackId} — matches system record`, 'success');
+      setVerifyPalletId(null);
+      setVerifyStep('pallet');
+      return;
+    }
+    const result = reportDiscrepancy({
+      palletId: verifyPalletId,
+      note: `Expected at ${expectedRackId}, found at ${foundRackId} during physical count`,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
       pushToast(result.error, 'error');
       return;
     }
-    pushToast(`${flagPalletId} flagged — hold ${result.data.hold.id} raised`, 'success');
-    setFlagPalletId(null);
-    setNote('');
+    pushToast(
+      `${verifyPalletId} mismatch — expected ${expectedRackId}, found ${foundRackId}. Pallet locked under investigation.`,
+      'error',
+    );
+    setVerifyPalletId(null);
+    setVerifyStep('pallet');
+  }
+
+  function cancelVerify() {
+    setVerifyPalletId(null);
+    setVerifyStep('pallet');
   }
 
   return (
@@ -66,8 +99,8 @@ export function AuditPage() {
       <div>
         <h1 className="text-xl font-bold text-white">Stage 7 · Inventory Audits</h1>
         <p className="text-sm text-slate-400">
-          Live reports computed from current warehouse state. Flagging a discrepancy raises a Hold
-          directly (requires Manager, HOD, or Director).
+          Live reports computed from current warehouse state. Flagging a discrepancy immediately
+          locks the pallet under investigation (Clerk only).
         </p>
       </div>
 
@@ -131,44 +164,112 @@ export function AuditPage() {
           <ReportRow label="Failed / retrying" value={String(syncCounts.Failed)} />
         </Report>
 
-        <Report title="Flag a discrepancy">
+        <Report title="Pallet journey — full traceability">
           <ScanInput
-            label="Scan racked pallet"
-            placeholder="e.g. PLT-003"
+            label="Scan any pallet ID"
+            placeholder="e.g. PLT-001"
             onScan={(id) => {
-              const pallet = pallets.find((p) => p.id === id);
-              if (!pallet || pallet.status !== 'Racked') {
-                pushToast(`${id} is not currently racked`, 'error');
+              const found = pallets.find((p) => p.id === id);
+              if (!found) {
+                pushToast(`Pallet ${id} not found`, 'error');
                 return;
               }
-              setFlagPalletId(id);
+              setJourneyPalletId(id);
             }}
-            suggestions={pallets.filter((p) => p.status === 'Racked' && !p.holdId).map((p) => p.id)}
+            suggestions={pallets.slice(0, 8).map((p) => p.id)}
           />
-          {flagPalletId && (
-            <div className="mt-3 space-y-2 rounded-lg border border-slate-800 bg-slate-800/60 p-3">
-              <div className="text-sm text-slate-300">
-                Pallet <span className="font-mono font-semibold text-slate-100">{flagPalletId}</span>
+          {journey && (
+            <div className="mt-3 space-y-3">
+              <div className="space-y-1.5 rounded-lg border border-slate-800 bg-slate-800/60 p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-400">Current status</span>
+                  <StatusPill status={journey.pallet.status} />
+                </div>
+                {journey.load && (
+                  <ReportRow label="Product" value={`${journey.load.productName} (${journey.load.sku})`} />
+                )}
+                {journey.batch && <ReportRow label="Batch" value={journey.batch.id} />}
+                {journey.holds.length > 0 && (
+                  <ReportRow
+                    label="Hold history"
+                    value={journey.holds.map((h) => `${h.reason} — ${h.status}`).join('; ')}
+                  />
+                )}
+                {journey.recallCase && (
+                  <ReportRow
+                    label="Recall"
+                    value={`${journey.recallCase.id} — ${
+                      journey.recallCase.status === 'Completed' ? 'Returned to storage' : journey.recallCase.currentStage
+                    }`}
+                  />
+                )}
+                {journey.manifest && (
+                  <ReportRow
+                    label="Dispatch"
+                    value={`${journey.manifest.id} — ${journey.manifest.customer}, truck ${journey.manifest.truckId} (${journey.manifest.sapStatus})`}
+                  />
+                )}
               </div>
-              <input
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="e.g. Found in wrong rack during physical count"
-                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
-              />
-              {isApprover ? (
-                <button
-                  onClick={handleFlag}
-                  className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-500"
-                >
-                  Flag discrepancy → raise hold
-                </button>
-              ) : (
-                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                  {currentUser?.role ?? 'This role'} cannot raise a hold — log in as Manager, HOD, or
-                  Director to continue.
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Movement timeline
                 </p>
-              )}
+                {journey.steps.length === 0 && (
+                  <p className="text-xs text-slate-500">No movements recorded yet.</p>
+                )}
+                <ol className="space-y-1">
+                  {journey.steps.map((s) => (
+                    <li key={s.id} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300">
+                        {s.from} → {s.to}
+                      </span>
+                      <span className="text-slate-500">
+                        {new Date(s.timestamp).toLocaleString()} · {operatorName(s.operatorId)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          )}
+        </Report>
+
+        <Report title="Inventory verification">
+          <p className="text-xs text-slate-500">
+            Physically walk the warehouse: scan the pallet you found, then scan the rack it was
+            actually sitting in. A mismatch immediately raises a discrepancy and locks the pallet.
+          </p>
+          {!isClerk && (
+            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {currentUser?.role ?? 'This role'} cannot perform inventory verification — log in as
+              Clerk to continue.
+            </p>
+          )}
+          {isClerk && verifyStep === 'pallet' && (
+            <ScanInput
+              label="Scan the pallet you found"
+              placeholder="e.g. PLT-003"
+              onScan={handleVerifyScanPallet}
+              suggestions={pallets.filter((p) => p.status === 'Racked' && !p.holdId).map((p) => p.id)}
+            />
+          )}
+          {isClerk && verifyStep === 'rack' && verifyPalletId && (
+            <div className="space-y-2">
+              <div className="rounded-lg border border-slate-800 bg-slate-800/60 p-3 text-sm text-slate-300">
+                Pallet <span className="font-mono font-semibold text-slate-100">{verifyPalletId}</span>{' '}
+                — system expects it at{' '}
+                <span className="font-mono font-semibold text-slate-100">{expectedRackId}</span>. Now
+                scan the rack you actually found it in.
+              </div>
+              <ScanInput
+                label="Scan the rack it was actually found in"
+                placeholder="e.g. R-A"
+                onScan={handleVerifyScanRack}
+                suggestions={racks.map((r) => r.id)}
+              />
+              <button onClick={cancelVerify} className="text-xs text-slate-500 hover:text-slate-300">
+                Cancel / start over
+              </button>
             </div>
           )}
         </Report>
