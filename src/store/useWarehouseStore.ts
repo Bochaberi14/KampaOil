@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
-  BayRack,
   Batch,
   DirectDispatchApproval,
   DriverConfirmation,
@@ -22,6 +21,7 @@ import type {
   User,
 } from '../types/domain';
 import {
+  EXCEPTION_LINE_ID,
   INITIAL_BATCHES,
   INITIAL_BAY_RACKS,
   INITIAL_HOLDS,
@@ -53,16 +53,36 @@ import {
   generateSyncTaskId,
   generateVehicleLabelId,
 } from '../engine/ids';
-import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
+import { countFreeRackSlots, findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
 import { can } from '../rbac';
 
-const RECALL_STAGE_ORDER: RecallStageName[] = [
-  'Inspection',
-  'Repacking',
-  'Relabelling',
-  'QA',
-  'ReturnedToStorage',
+const RECALL_STAGE_ORDER: RecallStageName[] = ['Inspection', 'Repacking', 'Relabelling', 'QA'];
+
+// A held pallet can sit at any of these statuses — everything except Empty
+// (nothing to hold) and InRecall/Scrapped (already past the hold gate).
+const HOLDABLE_PALLET_STATUSES: Pallet['status'][] = [
+  'Loaded',
+  'InTransitToStorage',
+  'Racked',
+  'InTransitToBay',
+  'OnBay',
+  'InTransitToTruck',
 ];
+
+// Pallets already claimed by an open pick task (requested, but not yet
+// physically released/arrived) — excluded from FIFO candidates so a second
+// request for the same or another sales order can't double-book the same
+// physical pallet while the first task is still pending/in transit.
+function reservedPalletIds(pickTasks: PickTask[]): Set<string> {
+  const ids = new Set<string>();
+  for (const t of pickTasks) {
+    if (t.status === 'Completed') continue;
+    for (const i of t.items) {
+      if (!i.picked) ids.add(i.palletId);
+    }
+  }
+  return ids;
+}
 
 export type ToastKind = 'success' | 'error' | 'info';
 export interface Toast {
@@ -85,7 +105,7 @@ interface WarehouseState {
 
   lines: Line[];
   racks: Rack[];
-  bayRacks: BayRack[];
+  bayRacks: Rack[];
   trucks: Truck[];
   pallets: Pallet[];
 
@@ -196,6 +216,7 @@ interface WarehouseState {
     targetType: 'Pallet' | 'Batch';
     targetId: string;
     reason: string;
+    note: string;
     operatorId: string;
   }) => Result<{ hold: HoldRecord }>;
   releaseHold: (holdId: string, operatorId: string) => Result;
@@ -204,6 +225,17 @@ interface WarehouseState {
     note: string;
     operatorId: string;
   }) => Result<{ hold: HoldRecord }>;
+  // Clerk flags any pallet with a problem — locks it immediately, but only
+  // Manager/HOD/Director approving or rejecting it decides whether it's a
+  // real hold.
+  flagHoldRequest: (args: {
+    palletId: string;
+    reason: string;
+    note: string | null;
+    operatorId: string;
+  }) => Result<{ hold: HoldRecord }>;
+  approveHoldRequest: (holdId: string, operatorId: string) => Result<{ hold: HoldRecord }>;
+  rejectHoldRequest: (args: { holdId: string; note: string | null; operatorId: string }) => Result;
 
   // Stage 6 — Recall Processing (Line 50)
   sendToRecall: (holdId: string, operatorId: string) => Result<{ recallCase: RecallCase }>;
@@ -212,11 +244,21 @@ interface WarehouseState {
     notes: string | null;
     operatorId: string;
   }) => Result<{ recallCase: RecallCase }>;
-  returnRecallPalletToRack: (args: {
+  // Manager/HOD/Director decide where a QA-cleared recalled pallet goes.
+  decideRecallDestination: (args: {
     recallCaseId: string;
-    rackId: string;
+    decision:
+      | { type: 'Storage'; rackId: string }
+      | { type: 'ReworkLine' }
+      | { type: 'Scrap' };
     operatorId: string;
-  }) => Result;
+  }) => Result<{ recallCase: RecallCase }>;
+  // Picker physically scans the pallet to the decided destination.
+  executeRecallDestination: (args: {
+    recallCaseId: string;
+    scannedId: string;
+    operatorId: string;
+  }) => Result<{ recallCase: RecallCase }>;
 
   resetDemo: () => void;
 }
@@ -472,6 +514,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             `Pallet ${palletId} is not a loaded pallet awaiting transit (status: ${pallet.status})`,
           );
         }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
         set((state) => ({
           pallets: state.pallets.map((p) =>
             p.id === palletId ? { ...p, status: 'InTransitToStorage', location: { type: 'InTransit' } } : p,
@@ -501,6 +544,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (pallet.status !== 'InTransitToStorage') {
           return err(`Pallet ${palletId} is not in transit to storage (status: ${pallet.status})`);
         }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
         const rack = state.racks.find((r) => r.id === rackId);
         if (!rack) return err(`Rack "${rackId}" not found`);
         const slot = rack.slots.find((s) => s.palletId === null);
@@ -541,16 +585,53 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const remaining = so.qty - so.dispatchedQty;
-        if (remaining <= 0) return err('Sales order already fulfilled');
 
+        // Stock already pulled for this order — requested, in transit, or
+        // sitting on the bay awaiting dispatch — on top of what's already
+        // dispatched. Only the remainder is worth requesting, which is what
+        // makes this callable again and again as more stock becomes
+        // available, instead of only once per sales order.
+        const committedQty = state.pickTasks
+          .filter((t) => t.salesOrderId === salesOrderId && t.origin === 'Storage')
+          .flatMap((t) => t.items)
+          .reduce((sum, i) => {
+            const load = state.loads.find((l) => l.palletId === i.palletId);
+            return load && load.status === 'InStorage' ? sum + i.quantity : sum;
+          }, 0);
+        const remaining = so.qty - so.dispatchedQty - committedQty;
+        if (remaining <= 0) {
+          return err(
+            committedQty > 0
+              ? `Sales order ${salesOrderId} already has enough stock requested or on the bay — dispatch it before requesting more`
+              : 'Sales order already fulfilled',
+          );
+        }
+
+        const reserved = reservedPalletIds(state.pickTasks);
         const rackedPalletIds = new Set(
-          state.pallets.filter((p) => p.status === 'Racked' && !p.holdId).map((p) => p.id),
+          state.pallets
+            .filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id))
+            .map((p) => p.id),
         );
         const candidates = state.loads.filter((l) => rackedPalletIds.has(l.palletId));
         const picked = selectFifoLoads(candidates, so.sku, remaining);
         if (picked.length === 0) {
           return err(`No stock available in storage for SKU ${so.sku}`);
+        }
+
+        // The bay only has so many slots — pallets already requested but not
+        // yet arrived (still in Storage or in transit) are each already
+        // headed for one, so a new request can't promise more than what's
+        // actually left.
+        const pendingBayArrivals = state.pickTasks
+          .filter((t) => t.origin === 'Storage')
+          .flatMap((t) => t.items)
+          .filter((i) => !i.picked).length;
+        const freeBaySlots = countFreeRackSlots(state.bayRacks);
+        if (freeBaySlots - pendingBayArrivals <= 0) {
+          return err(
+            'Loading bay is full — no free slot available. Dispatch pallets from the bay before requesting more stock.',
+          );
         }
 
         const items = picked.map((l) => {
@@ -720,9 +801,11 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!pallet || pallet.status !== 'InTransitToBay') {
           return err(`Pallet ${palletId} is not currently in transit to the bay. Scan rejected.`);
         }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
         const bayRack = state.bayRacks.find((b) => b.id === bayRackId);
         if (!bayRack) return err(`Bay rack "${bayRackId}" not found`);
-        if (bayRack.palletId) return err(`Bay rack ${bayRackId} is already occupied`);
+        const freeSlot = bayRack.slots.find((s) => s.palletId === null);
+        if (!freeSlot) return err(`Bay rack ${bayRackId} has no free slot`);
 
         const updatedItems = task.items.map((i) =>
           i.palletId === palletId ? { ...i, picked: true } : i,
@@ -730,9 +813,15 @@ export const useWarehouseStore = create<WarehouseState>()(
         const completed = updatedItems.every((i) => i.picked);
 
         set((state) => ({
-          bayRacks: state.bayRacks.map((b) => (b.id === bayRackId ? { ...b, palletId } : b)),
+          bayRacks: state.bayRacks.map((b) =>
+            b.id === bayRackId
+              ? { ...b, slots: b.slots.map((s) => (s.index === freeSlot.index ? { ...s, palletId } : s)) }
+              : b,
+          ),
           pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'OnBay', location: { type: 'BayRack', bayRackId } } : p,
+            p.id === palletId
+              ? { ...p, status: 'OnBay', location: { type: 'BayRack', bayRackId, slotIndex: freeSlot.index } }
+              : p,
           ),
           pickTasks: state.pickTasks.map((t) =>
             t.id === pickTaskId
@@ -759,9 +848,14 @@ export const useWarehouseStore = create<WarehouseState>()(
       availableOnBay: (sku) => {
         const state = get();
         return state.bayRacks.reduce((sum, b) => {
-          if (!b.palletId) return sum;
-          const load = state.loads.find((l) => l.palletId === b.palletId);
-          return sum + (load && load.sku === sku ? load.quantity : 0);
+          const palletIds = b.slots.map((s) => s.palletId).filter((id): id is string => !!id);
+          return (
+            sum +
+            palletIds.reduce((slotSum, palletId) => {
+              const load = state.loads.find((l) => l.palletId === palletId);
+              return slotSum + (load && load.sku === sku ? load.quantity : 0);
+            }, 0)
+          );
         }, 0);
       },
 
@@ -774,8 +868,11 @@ export const useWarehouseStore = create<WarehouseState>()(
         const shortfall = remaining - available;
         if (shortfall <= 0) return err('Bay already holds enough stock — no top-up needed');
 
+        const reserved = reservedPalletIds(state.pickTasks);
         const rackedPalletIds = new Set(
-          state.pallets.filter((p) => p.status === 'Racked' && !p.holdId).map((p) => p.id),
+          state.pallets
+            .filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id))
+            .map((p) => p.id),
         );
         const candidates = state.loads.filter((l) => rackedPalletIds.has(l.palletId));
         const picked = selectFifoLoads(candidates, so.sku, shortfall);
@@ -847,8 +944,13 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
         const bayRack = state.bayRacks.find((b) => b.id === bayRackId);
         if (!bayRack) return err(`Bay rack "${bayRackId}" not found`);
-        if (bayRack.palletId !== palletId) {
+        const occupiedSlot = bayRack.slots.find((s) => s.palletId === palletId);
+        if (!occupiedSlot) {
           return err(`Pallet ${palletId} is not on bay rack ${bayRackId}. Scan rejected.`);
+        }
+        const dispatchPallet = state.pallets.find((p) => p.id === palletId);
+        if (dispatchPallet?.holdId) {
+          return err(`Pallet ${palletId} is on hold — cannot dispatch until the hold is released`);
         }
         const truckId = state.trucks.find((t) => t.tempDispatchBarcode === vehicleBarcode)?.id;
         if (!truckId) {
@@ -875,7 +977,11 @@ export const useWarehouseStore = create<WarehouseState>()(
         const newDispatchedPalletIds = [...so.dispatchedPalletIds, palletId];
 
         set((state) => ({
-          bayRacks: state.bayRacks.map((b) => (b.id === bayRackId ? { ...b, palletId: null } : b)),
+          bayRacks: state.bayRacks.map((b) =>
+            b.id === bayRackId
+              ? { ...b, slots: b.slots.map((s) => (s.index === occupiedSlot.index ? { ...s, palletId: null } : s)) }
+              : b,
+          ),
           pallets: state.pallets.map((p) =>
             p.id === palletId ? { ...p, status: 'Empty', loadId: null, location: { type: 'FreePool' } } : p,
           ),
@@ -959,6 +1065,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!pallet || pallet.status !== 'InTransitToTruck') {
           return err(`Pallet ${palletId} is not ready for direct dispatch (status: ${pallet?.status ?? 'unknown'})`);
         }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot dispatch until the hold is released`);
         const load = state.loads.find((l) => l.palletId === palletId);
         if (!load) return err('Load record not found for this pallet');
         if (load.sku !== so.sku) {
@@ -1195,29 +1302,33 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ confirmation });
       },
 
-      placeHold: ({ targetType, targetId, reason, operatorId }) => {
+      placeHold: ({ targetType, targetId, reason, note, operatorId }) => {
         const state = get();
         const user = state.currentUser;
         if (!user) return err('Not logged in');
         if (!can(user.role, 'approve:hold')) {
           return err(`${user.role} cannot place a hold — requires Manager, HOD, or Director`);
         }
+        if (!note.trim()) {
+          return err('Describe why this is being held before placing the hold');
+        }
         if (targetType === 'Pallet') {
           const pallet = state.pallets.find((p) => p.id === targetId);
           if (!pallet) return err(`Pallet "${targetId}" not found`);
           if (pallet.holdId) return err(`Pallet ${targetId} already has an active hold`);
-          if (pallet.status !== 'Racked') {
+          if (!HOLDABLE_PALLET_STATUSES.includes(pallet.status)) {
             return err(
-              `Pallet ${targetId} must be in storage (Racked) to place a hold — current status: ${pallet.status}`,
+              `Pallet ${targetId} cannot be held (status: ${pallet.status}) — it must be an active pallet somewhere in the workflow (production, storage, bay, or dispatch)`,
             );
           }
         }
 
+        const fullReason = `${reason} — ${note.trim()}`;
         const hold: HoldRecord = {
           id: generateHoldId(),
           targetType,
           targetId,
-          reason,
+          reason: fullReason,
           placedByUserId: operatorId,
           placedByRole: user.role,
           placedAt: new Date().toISOString(),
@@ -1231,8 +1342,8 @@ export const useWarehouseStore = create<WarehouseState>()(
               ? state.pallets.map((p) => (p.id === targetId ? { ...p, holdId: hold.id } : p))
               : state.pallets,
         }));
-        get().pushToast(`Hold ${hold.id} placed on ${targetId} — ${reason}`, 'error');
-        get().enqueueSapSync('HoldPlaced', `Hold placed on ${targetId} — ${reason}`);
+        get().pushToast(`Hold ${hold.id} placed on ${targetId} — ${fullReason}`, 'error');
+        get().enqueueSapSync('HoldPlaced', `Hold placed on ${targetId} — ${fullReason}`);
         return ok({ hold });
       },
 
@@ -1272,9 +1383,9 @@ export const useWarehouseStore = create<WarehouseState>()(
         const pallet = state.pallets.find((p) => p.id === palletId);
         if (!pallet) return err(`Pallet "${palletId}" not found`);
         if (pallet.holdId) return err(`Pallet ${palletId} already has an active hold`);
-        if (pallet.status !== 'Racked') {
+        if (!HOLDABLE_PALLET_STATUSES.includes(pallet.status)) {
           return err(
-            `Pallet ${palletId} must be in storage (Racked) to report a discrepancy — current status: ${pallet.status}`,
+            `Pallet ${palletId} cannot be locked (status: ${pallet.status}) — it must be an active pallet somewhere in the workflow`,
           );
         }
 
@@ -1298,6 +1409,88 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ hold });
       },
 
+      flagHoldRequest: ({ palletId, reason, note, operatorId }) => {
+        const state = get();
+        const user = state.currentUser;
+        if (!user) return err('Not logged in');
+        if (!can(user.role, 'flag:hold')) {
+          return err(`${user.role} cannot flag a product for hold — requires Clerk`);
+        }
+        if (!note || !note.trim()) {
+          return err('Describe the issue before flagging — the approver needs to know why');
+        }
+        const pallet = state.pallets.find((p) => p.id === palletId);
+        if (!pallet) return err(`Pallet "${palletId}" not found`);
+        if (pallet.holdId) return err(`Pallet ${palletId} already has an active hold`);
+        if (!HOLDABLE_PALLET_STATUSES.includes(pallet.status)) {
+          return err(
+            `Pallet ${palletId} cannot be held (status: ${pallet.status}) — it must be an active pallet somewhere in the workflow`,
+          );
+        }
+
+        const hold: HoldRecord = {
+          id: generateHoldId(),
+          targetType: 'Pallet',
+          targetId: palletId,
+          reason: `${reason} — ${note.trim()}`,
+          placedByUserId: operatorId,
+          placedByRole: user.role,
+          placedAt: new Date().toISOString(),
+          status: 'PendingApproval',
+          releaseNote: null,
+        };
+        set((state) => ({
+          holds: [...state.holds, hold],
+          pallets: state.pallets.map((p) => (p.id === palletId ? { ...p, holdId: hold.id } : p)),
+        }));
+        get().pushToast(`Pallet ${palletId} locked pending review — ${reason}`, 'error');
+        get().enqueueSapSync('HoldFlagged', `Pallet ${palletId} flagged for hold — ${reason}`);
+        return ok({ hold });
+      },
+
+      approveHoldRequest: (holdId, operatorId) => {
+        const state = get();
+        const user = state.currentUser;
+        if (!user) return err('Not logged in');
+        if (!can(user.role, 'approve:hold')) {
+          return err(`${user.role} cannot approve a hold — requires Manager, HOD, or Director`);
+        }
+        const hold = state.holds.find((h) => h.id === holdId);
+        if (!hold) return err(`Hold "${holdId}" not found`);
+        if (hold.status !== 'PendingApproval') return err(`Hold ${holdId} is not awaiting approval (status: ${hold.status})`);
+
+        void operatorId;
+        const updated: HoldRecord = { ...hold, status: 'Active' };
+        set((state) => ({ holds: state.holds.map((h) => (h.id === holdId ? updated : h)) }));
+        get().pushToast(`Hold ${holdId} approved by ${user.role} — ${hold.targetId} stays locked`, 'success');
+        get().enqueueSapSync('HoldApproved', `Hold ${holdId} approved on ${hold.targetId}`);
+        return ok({ hold: updated });
+      },
+
+      rejectHoldRequest: ({ holdId, note, operatorId }) => {
+        const state = get();
+        const user = state.currentUser;
+        if (!user) return err('Not logged in');
+        if (!can(user.role, 'approve:hold')) {
+          return err(`${user.role} cannot reject a hold — requires Manager, HOD, or Director`);
+        }
+        const hold = state.holds.find((h) => h.id === holdId);
+        if (!hold) return err(`Hold "${holdId}" not found`);
+        if (hold.status !== 'PendingApproval') return err(`Hold ${holdId} is not awaiting approval (status: ${hold.status})`);
+
+        set((state) => ({
+          holds: state.holds.map((h) =>
+            h.id === holdId
+              ? { ...h, status: 'Rejected', releaseNote: note ?? `Rejected by ${operatorId}` }
+              : h,
+          ),
+          pallets: state.pallets.map((p) => (p.id === hold.targetId ? { ...p, holdId: null } : p)),
+        }));
+        get().pushToast(`Hold ${holdId} rejected — ${hold.targetId} rejoins normal flow`, 'info');
+        get().enqueueSapSync('HoldRejected', `Hold ${holdId} rejected on ${hold.targetId}`);
+        return ok(undefined);
+      },
+
       sendToRecall: (holdId, operatorId) => {
         const state = get();
         const user = state.currentUser;
@@ -1311,13 +1504,25 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (hold.targetType !== 'Pallet') return err('Only pallet-level holds can be sent to recall');
         const pallet = state.pallets.find((p) => p.id === hold.targetId);
         if (!pallet) return err(`Pallet "${hold.targetId}" not found`);
-        if (pallet.status !== 'Racked' || pallet.location.type !== 'Rack') {
-          return err(`Pallet ${hold.targetId} is not currently racked (status: ${pallet.status})`);
-        }
+        if (pallet.holdId !== hold.id) return err(`Pallet ${hold.targetId} does not match this hold`);
         const load = state.loads.find((l) => l.palletId === pallet.id);
         if (!load) return err('Load record not found for this pallet');
 
-        const { rackId, slotIndex } = pallet.location;
+        // A held pallet can be anywhere in the workflow now — vacate whatever
+        // slot it currently occupies (a Rack/BayRack slot, or nothing at all
+        // if it was mid-line/in-transit/on a truck) before moving it to Recall.
+        const location = pallet.location;
+        const fromLabel =
+          location.type === 'Rack'
+            ? `Rack ${location.rackId}`
+            : location.type === 'BayRack'
+              ? `Bay ${location.bayRackId}`
+              : location.type === 'Line'
+                ? `Line ${location.lineId}`
+                : location.type === 'Truck'
+                  ? `Truck ${location.truckId}`
+                  : 'In transit';
+
         const recallCase: RecallCase = {
           id: generateRecallCaseId(),
           holdId,
@@ -1326,14 +1531,27 @@ export const useWarehouseStore = create<WarehouseState>()(
           currentStage: 'Inspection',
           history: [],
           status: 'InProgress',
+          destinationDecision: null,
+          originalRackId: location.type === 'Rack' ? location.rackId : null,
         };
 
         set((state) => ({
-          racks: state.racks.map((r) =>
-            r.id === rackId
-              ? { ...r, slots: r.slots.map((s) => (s.index === slotIndex ? { ...s, palletId: null } : s)) }
-              : r,
-          ),
+          racks:
+            location.type === 'Rack'
+              ? state.racks.map((r) =>
+                  r.id === location.rackId
+                    ? { ...r, slots: r.slots.map((s) => (s.index === location.slotIndex ? { ...s, palletId: null } : s)) }
+                    : r,
+                )
+              : state.racks,
+          bayRacks:
+            location.type === 'BayRack'
+              ? state.bayRacks.map((b) =>
+                  b.id === location.bayRackId
+                    ? { ...b, slots: b.slots.map((s) => (s.index === location.slotIndex ? { ...s, palletId: null } : s)) }
+                    : b,
+                )
+              : state.bayRacks,
           pallets: state.pallets.map((p) =>
             p.id === pallet.id
               ? { ...p, status: 'InRecall', location: { type: 'Recall' }, holdId: null }
@@ -1346,7 +1564,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             {
               id: generateMovementId(),
               palletId: pallet.id,
-              from: `Rack ${rackId}`,
+              from: fromLabel,
               to: 'Recall Line 50',
               timestamp: new Date().toISOString(),
               operatorId,
@@ -1365,85 +1583,190 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const recallCase = state.recallCases.find((r) => r.id === recallCaseId);
         if (!recallCase) return err(`Recall case "${recallCaseId}" not found`);
-        if (recallCase.status !== 'InProgress') return err('Recall case is already completed');
+        if (recallCase.status !== 'InProgress') return err('Recall case is not awaiting a stage advance');
         const currentIndex = RECALL_STAGE_ORDER.indexOf(recallCase.currentStage);
         const nextStage = RECALL_STAGE_ORDER[currentIndex + 1];
-        if (!nextStage || nextStage === 'ReturnedToStorage') {
-          return err('QA is the final processing stage — scan a rack to return this pallet to storage');
+        const historyEntry = {
+          stage: recallCase.currentStage,
+          completedAt: new Date().toISOString(),
+          byUserId: operatorId,
+          notes,
+        };
+
+        // Past QA there's no next pipeline stage — hand off to Manager/HOD/
+        // Director to decide where the pallet goes (see decideRecallDestination).
+        const updated: RecallCase = nextStage
+          ? { ...recallCase, currentStage: nextStage, history: [...recallCase.history, historyEntry] }
+          : { ...recallCase, status: 'AwaitingDestinationDecision', history: [...recallCase.history, historyEntry] };
+
+        set((state) => ({
+          recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
+        }));
+        get().pushToast(
+          nextStage
+            ? `Recall ${recallCaseId} advanced to ${nextStage}`
+            : `Recall ${recallCaseId} passed QA — awaiting Manager/HOD/Director to decide its destination`,
+          'success',
+        );
+        return ok({ recallCase: updated });
+      },
+
+      decideRecallDestination: ({ recallCaseId, decision, operatorId }) => {
+        const state = get();
+        const user = state.currentUser;
+        if (!user) return err('Not logged in');
+        if (!can(user.role, 'approve:recall')) {
+          return err(`${user.role} cannot decide a recall destination — requires Manager, HOD, or Director`);
         }
+        const recallCase = state.recallCases.find((r) => r.id === recallCaseId);
+        if (!recallCase) return err(`Recall case "${recallCaseId}" not found`);
+        if (recallCase.status !== 'AwaitingDestinationDecision') {
+          return err(`Recall case ${recallCaseId} is not awaiting a destination decision (status: ${recallCase.status})`);
+        }
+
+        let targetRackId: string | null = null;
+        let targetLineId: string | null = null;
+        let destinationLabel = 'Scrap';
+        if (decision.type === 'Storage') {
+          const rack = state.racks.find((r) => r.id === decision.rackId);
+          if (!rack) return err(`Rack "${decision.rackId}" not found`);
+          targetRackId = rack.id;
+          destinationLabel = `Storage — ${rack.id}`;
+        } else if (decision.type === 'ReworkLine') {
+          // Rework always goes to the dedicated Exception Line — never a live
+          // numbered production line, so recalled stock never mixes into a
+          // batch currently running for a sales order.
+          const line = state.lines.find((l) => l.id === EXCEPTION_LINE_ID);
+          if (!line) return err('Exception Line not found');
+          targetLineId = line.id;
+          destinationLabel = `Rework on ${line.name}`;
+        }
+
         const updated: RecallCase = {
           ...recallCase,
-          currentStage: nextStage,
-          history: [
-            ...recallCase.history,
-            { stage: recallCase.currentStage, completedAt: new Date().toISOString(), byUserId: operatorId, notes },
-          ],
+          status: 'AwaitingPickerAction',
+          destinationDecision: {
+            type: decision.type,
+            targetRackId,
+            targetLineId,
+            decidedByUserId: operatorId,
+            decidedByRole: user.role,
+            decidedAt: new Date().toISOString(),
+          },
         };
         set((state) => ({
           recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
         }));
-        get().pushToast(`Recall ${recallCaseId} advanced to ${nextStage}`, 'success');
+        get().pushToast(
+          `Recall ${recallCaseId} destination decided: ${destinationLabel} — awaiting a Picker to complete the move`,
+          'info',
+        );
+        get().enqueueSapSync('RecallDestinationDecided', `Recall ${recallCaseId} destination decided: ${destinationLabel}`);
         return ok({ recallCase: updated });
       },
 
-      returnRecallPalletToRack: ({ recallCaseId, rackId, operatorId }) => {
+      executeRecallDestination: ({ recallCaseId, scannedId, operatorId }) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'approve:recall')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot return a recall pallet to storage — requires Manager, HOD, or Director`);
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot complete a recall move — requires Picker`);
         }
         const recallCase = state.recallCases.find((r) => r.id === recallCaseId);
         if (!recallCase) return err(`Recall case "${recallCaseId}" not found`);
-        if (recallCase.status !== 'InProgress') return err('Recall case is already completed');
-        if (recallCase.currentStage !== 'QA') {
-          return err(`Recall case must complete QA before returning to storage (currently ${recallCase.currentStage})`);
+        const decision = recallCase.destinationDecision;
+        if (recallCase.status !== 'AwaitingPickerAction' || !decision) {
+          return err(`Recall case ${recallCaseId} has no pending picker action`);
         }
-        const rack = state.racks.find((r) => r.id === rackId);
-        if (!rack) return err(`Rack "${rackId}" not found`);
-        const slot = rack.slots.find((s) => s.palletId === null);
-        if (!slot) return err(`Rack ${rackId} has no free slot`);
-
         const now = new Date().toISOString();
+
+        if (decision.type === 'Storage') {
+          if (scannedId !== decision.targetRackId) {
+            return err(
+              `Scan rejected — Manager/HOD/Director decided this pallet returns to rack ${decision.targetRackId}, not ${scannedId}`,
+            );
+          }
+          const rack = state.racks.find((r) => r.id === scannedId);
+          if (!rack) return err(`Rack "${scannedId}" not found`);
+          const slot = rack.slots.find((s) => s.palletId === null);
+          if (!slot) return err(`Rack ${scannedId} has no free slot`);
+
+          const updated: RecallCase = { ...recallCase, status: 'Completed' };
+          set((state) => ({
+            racks: state.racks.map((r) =>
+              r.id === scannedId
+                ? { ...r, slots: r.slots.map((s) => (s.index === slot.index ? { ...s, palletId: recallCase.palletId } : s)) }
+                : r,
+            ),
+            pallets: state.pallets.map((p) =>
+              p.id === recallCase.palletId
+                ? { ...p, status: 'Racked', location: { type: 'Rack', rackId: scannedId, slotIndex: slot.index } }
+                : p,
+            ),
+            // Recalled stock rejoins FIFO at the back of the queue — the
+            // original batch is what triggered the hold, so it shouldn't jump
+            // ahead of untouched stock just because it was produced earlier.
+            loads: state.loads.map((l) => (l.palletId === recallCase.palletId ? { ...l, producedAt: now } : l)),
+            recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
+            holds: state.holds.map((h) => (h.id === recallCase.holdId ? { ...h, status: 'Released' as const } : h)),
+            movements: [
+              ...state.movements,
+              { id: generateMovementId(), palletId: recallCase.palletId, from: 'Recall Line 50', to: `Rack ${scannedId}`, timestamp: now, operatorId },
+            ],
+          }));
+          get().pushToast(`Pallet ${recallCase.palletId} returned to storage at ${scannedId} — rejoins FIFO`, 'success');
+          get().enqueueSapSync('ReturnedFromRecall', `Pallet ${recallCase.palletId} returned to storage at ${scannedId}`);
+          return ok({ recallCase: updated });
+        }
+
+        if (decision.type === 'ReworkLine') {
+          if (scannedId !== decision.targetLineId) {
+            return err(
+              `Scan rejected — Manager/HOD/Director decided this pallet reworks on ${decision.targetLineId}, not ${scannedId}`,
+            );
+          }
+          const line = state.lines.find((l) => l.id === scannedId);
+          if (!line) return err(`Line "${scannedId}" not found`);
+
+          const updated: RecallCase = { ...recallCase, status: 'Completed' };
+          set((state) => ({
+            pallets: state.pallets.map((p) =>
+              p.id === recallCase.palletId
+                ? { ...p, status: 'Loaded', location: { type: 'Line', lineId: scannedId } }
+                : p,
+            ),
+            recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
+            holds: state.holds.map((h) => (h.id === recallCase.holdId ? { ...h, status: 'Released' as const } : h)),
+            movements: [
+              ...state.movements,
+              { id: generateMovementId(), palletId: recallCase.palletId, from: 'Recall Line 50', to: `${line.name} (rework)`, timestamp: now, operatorId },
+            ],
+          }));
+          get().pushToast(`Pallet ${recallCase.palletId} handed back to ${line.name} for rework`, 'success');
+          get().enqueueSapSync('ReturnedFromRecall', `Pallet ${recallCase.palletId} sent to ${line.name} for rework`);
+          return ok({ recallCase: updated });
+        }
+
+        // Scrap — the picker scans the pallet itself to confirm disposal.
+        if (scannedId !== recallCase.palletId) {
+          return err(`Scan rejected — scan the pallet itself (${recallCase.palletId}) to confirm disposal`);
+        }
+        const updated: RecallCase = { ...recallCase, status: 'Completed' };
         set((state) => ({
-          racks: state.racks.map((r) =>
-            r.id === rackId
-              ? { ...r, slots: r.slots.map((s) => (s.index === slot.index ? { ...s, palletId: recallCase.palletId } : s)) }
-              : r,
-          ),
           pallets: state.pallets.map((p) =>
-            p.id === recallCase.palletId
-              ? { ...p, status: 'Racked', location: { type: 'Rack', rackId, slotIndex: slot.index } }
-              : p,
+            p.id === recallCase.palletId ? { ...p, status: 'Scrapped', location: { type: 'Scrapped' } } : p,
           ),
-          // Recalled stock rejoins FIFO at the back of the queue — the
-          // original batch is what triggered the hold, so it shouldn't jump
-          // ahead of untouched stock just because it was produced earlier.
-          loads: state.loads.map((l) => (l.palletId === recallCase.palletId ? { ...l, producedAt: now } : l)),
-          recallCases: state.recallCases.map((r) =>
-            r.id === recallCaseId
-              ? {
-                  ...r,
-                  currentStage: 'ReturnedToStorage' as const,
-                  status: 'Completed' as const,
-                  history: [...r.history, { stage: 'QA' as const, completedAt: now, byUserId: operatorId, notes: null }],
-                }
-              : r,
+          loads: state.loads.map((l) =>
+            l.palletId === recallCase.palletId ? { ...l, status: 'Disposed' as const } : l,
           ),
+          recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
           holds: state.holds.map((h) => (h.id === recallCase.holdId ? { ...h, status: 'Released' as const } : h)),
           movements: [
             ...state.movements,
-            {
-              id: generateMovementId(),
-              palletId: recallCase.palletId,
-              from: 'Recall Line 50',
-              to: `Rack ${rackId}`,
-              timestamp: now,
-              operatorId,
-            },
+            { id: generateMovementId(), palletId: recallCase.palletId, from: 'Recall Line 50', to: 'Scrapped', timestamp: now, operatorId },
           ],
         }));
-        get().pushToast(`Pallet ${recallCase.palletId} returned to storage at ${rackId} — rejoins FIFO`, 'success');
-        get().enqueueSapSync('ReturnedFromRecall', `Pallet ${recallCase.palletId} returned to storage at ${rackId}`);
-        return ok(undefined);
+        get().pushToast(`Pallet ${recallCase.palletId} confirmed scrapped`, 'error');
+        get().enqueueSapSync('RecallScrapped', `Pallet ${recallCase.palletId} scrapped after recall`);
+        return ok({ recallCase: updated });
       },
 
       resetDemo: () => {
@@ -1451,7 +1774,7 @@ export const useWarehouseStore = create<WarehouseState>()(
       },
     }),
     {
-      name: 'kampaoil-warehouse-demo',
+      name: 'kapaoil-warehouse-demo-v2',
       partialize: (state) => {
         const { toasts: _toasts, sapSyncing: _sapSyncing, ...rest } = state;
         return rest;

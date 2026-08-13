@@ -152,7 +152,7 @@ export function AuditPage() {
               <span className="text-slate-300">
                 {rc.id} · {rc.palletId}
               </span>
-              <StatusPill status={rc.status === 'Completed' ? 'ReturnedToStorage' : rc.currentStage} />
+              <StatusPill status={rc.status === 'InProgress' ? rc.currentStage : rc.status} />
             </div>
           ))}
           {recallCases.length === 0 && <Empty />}
@@ -199,7 +199,15 @@ export function AuditPage() {
                   <ReportRow
                     label="Recall"
                     value={`${journey.recallCase.id} — ${
-                      journey.recallCase.status === 'Completed' ? 'Returned to storage' : journey.recallCase.currentStage
+                      journey.recallCase.status === 'Completed'
+                        ? journey.recallCase.destinationDecision?.type === 'Storage'
+                          ? `Returned to storage — ${journey.recallCase.destinationDecision.targetRackId}`
+                          : journey.recallCase.destinationDecision?.type === 'ReworkLine'
+                            ? `Reworked on ${journey.recallCase.destinationDecision.targetLineId}`
+                            : 'Scrapped'
+                        : journey.recallCase.status === 'InProgress'
+                          ? journey.recallCase.currentStage
+                          : journey.recallCase.status
                     }`}
                   />
                 )}

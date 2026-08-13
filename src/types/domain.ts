@@ -14,16 +14,18 @@ export type PalletStatus =
   | 'InTransitToBay'
   | 'OnBay'
   | 'InTransitToTruck'
-  | 'InRecall';
+  | 'InRecall'
+  | 'Scrapped';
 
 export type PalletLocation =
   | { type: 'FreePool' }
   | { type: 'Line'; lineId: string }
   | { type: 'InTransit' }
   | { type: 'Rack'; rackId: string; slotIndex: number }
-  | { type: 'BayRack'; bayRackId: string }
+  | { type: 'BayRack'; bayRackId: string; slotIndex: number }
   | { type: 'Truck'; truckId: string }
-  | { type: 'Recall' };
+  | { type: 'Recall' }
+  | { type: 'Scrapped' };
 
 export interface Pallet {
   id: string;
@@ -76,7 +78,7 @@ export interface Load {
   lineId: string;
   producedAt: string;
   operatorId: string;
-  status: 'InStorage' | 'Dispatched';
+  status: 'InStorage' | 'Dispatched' | 'Disposed';
 }
 
 export interface RackSlot {
@@ -88,12 +90,6 @@ export interface Rack {
   id: string;
   name: string;
   slots: RackSlot[];
-}
-
-export interface BayRack {
-  id: string;
-  name: string;
-  palletId: string | null;
 }
 
 export interface Truck {
@@ -169,11 +165,28 @@ export interface HoldRecord {
   placedByUserId: string;
   placedByRole: Role;
   placedAt: string;
-  status: 'Active' | 'Released' | 'SentToRecall';
+  // A Clerk-flagged problem starts PendingApproval — the pallet is locked
+  // immediately, but only becomes a real (recall-eligible) hold once a
+  // Manager/HOD/Director approves it; they can also Reject it, which
+  // releases the pallet without ever treating it as an active hold.
+  status: 'PendingApproval' | 'Active' | 'Released' | 'Rejected' | 'SentToRecall';
   releaseNote: string | null;
 }
 
-export type RecallStageName = 'Inspection' | 'Repacking' | 'Relabelling' | 'QA' | 'ReturnedToStorage';
+export type RecallStageName = 'Inspection' | 'Repacking' | 'Relabelling' | 'QA';
+
+// Where Manager/HOD/Director decide a recalled pallet ends up once it clears
+// QA — a Picker then physically scans it there (see RecallCase.status).
+export type RecallDestinationType = 'Storage' | 'ReworkLine' | 'Scrap';
+
+export interface RecallDestinationDecision {
+  type: RecallDestinationType;
+  targetRackId: string | null; // set when type === 'Storage'
+  targetLineId: string | null; // set when type === 'ReworkLine'
+  decidedByUserId: string;
+  decidedByRole: Role;
+  decidedAt: string;
+}
 
 export interface RecallCase {
   id: string;
@@ -182,7 +195,13 @@ export interface RecallCase {
   batchId: string;
   currentStage: RecallStageName;
   history: { stage: RecallStageName; completedAt: string; byUserId: string; notes: string | null }[];
-  status: 'InProgress' | 'Completed';
+  status: 'InProgress' | 'AwaitingDestinationDecision' | 'AwaitingPickerAction' | 'Completed';
+  destinationDecision: RecallDestinationDecision | null;
+  // The rack this pallet was racked in immediately before being sent to
+  // recall (null if it was held somewhere other than storage) — lets the
+  // approver send it straight back where it came from instead of picking a
+  // rack from scratch.
+  originalRackId: string | null;
 }
 
 export interface DirectDispatchApproval {

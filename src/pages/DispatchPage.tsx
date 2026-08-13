@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
+import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
-import { BayRackCard, TruckCard } from '../components/EntityCards';
+import { TruckCard } from '../components/EntityCards';
 import { can } from '../rbac';
 
 type WizardStep = 'bay' | 'pallet' | 'label' | 'truck';
@@ -14,6 +15,7 @@ export function DispatchPage() {
   const bayRacks = useWarehouseStore((s) => s.bayRacks);
   const trucks = useWarehouseStore((s) => s.trucks);
   const pallets = useWarehouseStore((s) => s.pallets);
+  const loads = useWarehouseStore((s) => s.loads);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const manifests = useWarehouseStore((s) => s.manifests);
   const driverConfirmations = useWarehouseStore((s) => s.driverConfirmations);
@@ -69,7 +71,7 @@ export function DispatchPage() {
 
   function handleScanBay(bayRackId: string) {
     const bayRack = bayRacks.find((b) => b.id === bayRackId);
-    if (!bayRack || !bayRack.palletId) {
+    if (!bayRack || !bayRack.slots.some((s) => s.palletId !== null)) {
       pushToast(`Bay rack ${bayRackId} is empty — scan rejected`, 'error');
       return;
     }
@@ -79,7 +81,7 @@ export function DispatchPage() {
   function handleScanPallet(palletId: string) {
     if (!wizard.bayRackId) return;
     const bayRack = bayRacks.find((b) => b.id === wizard.bayRackId);
-    if (bayRack?.palletId !== palletId) {
+    if (!bayRack?.slots.some((s) => s.palletId === palletId)) {
       pushToast(`Pallet ${palletId} does not match bay rack ${wizard.bayRackId} — scan rejected`, 'error');
       return;
     }
@@ -179,7 +181,7 @@ export function DispatchPage() {
     }
   }
 
-  const occupiedBayRackIds = bayRacks.filter((b) => b.palletId).map((b) => b.id);
+  const occupiedBayRackIds = bayRacks.filter((b) => b.slots.some((s) => s.palletId !== null)).map((b) => b.id);
 
   return (
     <div className="space-y-8">
@@ -309,7 +311,14 @@ export function DispatchPage() {
                   label={`Scan pallet on ${wizard.bayRackId}`}
                   placeholder="e.g. PLT-005"
                   onScan={handleScanPallet}
-                  suggestions={wizard.bayRackId ? [bayRacks.find((b) => b.id === wizard.bayRackId)?.palletId ?? ''] : []}
+                  suggestions={
+                    wizard.bayRackId
+                      ? bayRacks
+                          .find((b) => b.id === wizard.bayRackId)
+                          ?.slots.map((s) => s.palletId)
+                          .filter((id): id is string => !!id) ?? []
+                      : []
+                  }
                 />
               )}
               {wizard.step === 'label' && (
@@ -408,9 +417,9 @@ export function DispatchPage() {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Loading bay
         </h2>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {bayRacks.map((b) => (
-            <BayRackCard key={b.id} bayRack={b} highlighted={b.id === wizard.bayRackId} />
+            <RackGrid key={b.id} rack={b} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
           ))}
         </div>
       </div>

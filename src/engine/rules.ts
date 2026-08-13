@@ -1,4 +1,4 @@
-import type { BayRack, Load, Rack } from '../types/domain';
+import type { Load, Pallet, Rack } from '../types/domain';
 
 export function findFreeRackSlot(racks: Rack[]) {
   for (const rack of racks) {
@@ -22,16 +22,54 @@ export function countRackedPallets(racks: Rack[]): number {
   );
 }
 
-export function findFreeBayRack(bayRacks: BayRack[]) {
-  return bayRacks.find((b) => b.palletId === null) ?? null;
-}
-
 export function findRackHoldingPallet(racks: Rack[], palletId: string) {
   for (const rack of racks) {
     const slot = rack.slots.find((s) => s.palletId === palletId);
     if (slot) return { rackId: rack.id, slotIndex: slot.index };
   }
   return null;
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  Empty: 'Free pallet pool',
+  Loaded: 'Production / Line',
+  InTransitToStorage: 'In transit to storage',
+  Racked: 'Storage',
+  InTransitToBay: 'In transit to loading bay',
+  OnBay: 'Loading bay',
+  InTransitToTruck: 'In transit to dispatch',
+  InRecall: 'Recall (Line 50)',
+  Scrapped: 'Scrapped',
+};
+
+// Human-readable stage name for a pallet's current status — used wherever a
+// held/tracked pallet needs to show "where" it is beyond a bare status enum
+// (Hold page, pallet inventory breakdown).
+export function stageLabel(pallet: Pallet): string {
+  return STAGE_LABELS[pallet.status] ?? pallet.status;
+}
+
+export interface PalletSummary {
+  total: number;
+  empty: number;
+  occupied: number;
+  byStage: { label: string; count: number }[];
+}
+
+export function summarizePallets(pallets: Pallet[]): PalletSummary {
+  const total = pallets.length;
+  const empty = pallets.filter((p) => p.status === 'Empty').length;
+  const occupied = total - empty;
+
+  const counts = new Map<string, number>();
+  for (const pallet of pallets) {
+    if (pallet.status === 'Empty') continue;
+    const label = stageLabel(pallet);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const byStage = Array.from(counts, ([label, count]) => ({ label, count }));
+
+  return { total, empty, occupied, byStage };
 }
 
 /**

@@ -27,30 +27,36 @@ export function Layout() {
   const pendingApprovalCount = useWarehouseStore(
     (s) => s.directDispatchApprovals.filter((a) => a.status === 'PendingApproval').length,
   );
+  const pendingRecallPickerCount = useWarehouseStore(
+    (s) => s.recallCases.filter((r) => r.status === 'AwaitingPickerAction').length,
+  );
   const navigate = useNavigate();
   const visibleNav = NAV.filter((item) => can(user?.role, item.permission));
 
   const badgeByPath: Record<string, number> = {
     '/storage': pendingAcceptanceCount,
     '/dispatch': pendingApprovalCount,
+    '/recall': pendingRecallPickerCount,
   };
 
   // Announce what's awaiting this role the moment they log in — and again if
   // more piles up while they're still signed in (e.g. a second shortfall gets
   // approved while a Picker is mid-session).
-  const notifiedRef = useRef<{ userId: string | null; acceptance: number; approval: number }>({
+  const notifiedRef = useRef<{ userId: string | null; acceptance: number; approval: number; recallPicker: number }>({
     userId: null,
     acceptance: 0,
     approval: 0,
+    recallPicker: 0,
   });
   useEffect(() => {
     if (!user) {
-      notifiedRef.current = { userId: null, acceptance: 0, approval: 0 };
+      notifiedRef.current = { userId: null, acceptance: 0, approval: 0, recallPicker: 0 };
       return;
     }
     const isNewSession = notifiedRef.current.userId !== user.id;
     const prevAcceptance = isNewSession ? 0 : notifiedRef.current.acceptance;
     const prevApproval = isNewSession ? 0 : notifiedRef.current.approval;
+    const prevRecallPicker = isNewSession ? 0 : notifiedRef.current.recallPicker;
 
     if (can(user.role, 'execute:pickTask') && pendingAcceptanceCount > prevAcceptance) {
       pushToast(
@@ -64,8 +70,19 @@ export function Layout() {
         'info',
       );
     }
-    notifiedRef.current = { userId: user.id, acceptance: pendingAcceptanceCount, approval: pendingApprovalCount };
-  }, [user, pendingAcceptanceCount, pendingApprovalCount, pushToast]);
+    if (can(user.role, 'execute:scan') && pendingRecallPickerCount > prevRecallPicker) {
+      pushToast(
+        `${pendingRecallPickerCount} recalled pallet${pendingRecallPickerCount === 1 ? '' : 's'} awaiting you to scan to its decided destination`,
+        'info',
+      );
+    }
+    notifiedRef.current = {
+      userId: user.id,
+      acceptance: pendingAcceptanceCount,
+      approval: pendingApprovalCount,
+      recallPicker: pendingRecallPickerCount,
+    };
+  }, [user, pendingAcceptanceCount, pendingApprovalCount, pendingRecallPickerCount, pushToast]);
 
   function handleLogout() {
     logout();
@@ -89,7 +106,7 @@ export function Layout() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-3">
           <div className="flex flex-wrap items-center gap-6">
             <span className="text-lg font-bold text-white">
-              Kampa Oil <span className="font-normal text-slate-500">· WMS Prototype</span>
+              Kapa Oil <span className="font-normal text-slate-500">· WMS Prototype</span>
             </span>
             <nav className="flex flex-wrap gap-1">
               {visibleNav.map((item) => {

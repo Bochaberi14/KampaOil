@@ -15,7 +15,8 @@ export type Permission =
   | 'approve:recall'
   | 'approve:directDispatch'
   | 'sign:supervisor'
-  | 'report:discrepancy';
+  | 'report:discrepancy'
+  | 'flag:hold';
 
 const SUPERVISOR_PERMISSIONS: Permission[] = [
   'view:dashboard',
@@ -42,10 +43,17 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'view:storage',
     'view:loading-bay',
     'view:dispatch',
+    // Pickers don't approve holds/recalls, but they physically scan a
+    // recalled pallet to whatever destination Manager/HOD/Director decided —
+    // so they need to reach the Recall page to perform that scan.
+    'view:recall',
     'execute:scan',
     'execute:pickTask',
   ],
-  Clerk: ['view:dashboard', 'view:audit', 'report:discrepancy'],
+  // Clerk can flag any product with a problem for a hold (view:hold +
+  // flag:hold) on top of the rack-mismatch discrepancy path — but flagging
+  // only requests a hold; Manager/HOD/Director still approve or reject it.
+  Clerk: ['view:dashboard', 'view:audit', 'view:hold', 'report:discrepancy', 'flag:hold'],
 };
 
 export const ROLE_BLURB: Record<Role, string> = {
@@ -53,7 +61,7 @@ export const ROLE_BLURB: Record<Role, string> = {
   Manager: 'Manage operations — approve holds, recalls & direct dispatch',
   HOD: 'Supervise warehouse — approve picking, holds & recalls',
   Picker: 'Scan & move pallets — production, storage, loading bay, dispatch',
-  Clerk: 'Read-only — inventory reports & discrepancy reporting',
+  Clerk: 'Inventory reports & discrepancy reporting — can flag a product for hold, not approve one',
 };
 
 export const ROUTE_PERMISSION: Record<string, Permission> = {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
-import { BayRackCard } from '../components/EntityCards';
+import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
 import { can } from '../rbac';
 
@@ -12,6 +12,7 @@ export function LoadingBayPage() {
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const bayRacks = useWarehouseStore((s) => s.bayRacks);
   const pallets = useWarehouseStore((s) => s.pallets);
+  const loads = useWarehouseStore((s) => s.loads);
   const requestPick = useWarehouseStore((s) => s.requestPick);
   const scanBayRackForPick = useWarehouseStore((s) => s.scanBayRackForPick);
   const pushToast = useWarehouseStore((s) => s.pushToast);
@@ -72,7 +73,7 @@ export function LoadingBayPage() {
     }
   }
 
-  const freeBayRackIds = bayRacks.filter((b) => !b.palletId).map((b) => b.id);
+  const freeBayRackIds = bayRacks.filter((b) => b.slots.some((s) => s.palletId === null)).map((b) => b.id);
   const isPicker = can(currentUser?.role, 'execute:scan');
 
   return (
@@ -99,12 +100,12 @@ export function LoadingBayPage() {
               </div>
               <div className="flex items-center gap-2">
                 <StatusPill status={so.status} />
-                {so.status === 'Pending' && isPicker && (
+                {so.status !== 'Fulfilled' && isPicker && (
                   <button
                     onClick={() => handleRequestPick(so.id)}
                     className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
                   >
-                    Request pick
+                    {so.status === 'Pending' ? 'Request pick' : 'Request more'}
                   </button>
                 )}
               </div>
@@ -202,9 +203,9 @@ export function LoadingBayPage() {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Loading bay racks
         </h2>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {bayRacks.map((b) => (
-            <BayRackCard key={b.id} bayRack={b} highlighted={b.palletId === wizard.palletId} />
+            <RackGrid key={b.id} rack={b} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
           ))}
         </div>
       </div>

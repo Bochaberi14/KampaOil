@@ -1,7 +1,7 @@
-# Kampa Oil — Warehouse Management System (Demo)
+# Kapa Oil — Warehouse Management System (Demo)
 
 An interactive prototype of an SAP-integrated warehouse execution system for
-Kampa Oil, covering the full production-to-dispatch lifecycle:
+Kapa Oil, covering the full production-to-dispatch lifecycle:
 
 - **Production** — scan a line, bind a pallet, confirm a load once it's full
 - **Storage** — scan a pallet into a rack, live inventory by rack

@@ -1,13 +1,15 @@
-import type { Rack } from '../types/domain';
+import type { Load, Rack } from '../types/domain';
 
 export function RackGrid({
   rack,
   highlightPalletId,
   heldPalletIds,
+  loads,
 }: {
   rack: Rack;
   highlightPalletId?: string;
   heldPalletIds?: string[];
+  loads?: Load[];
 }) {
   const free = rack.slots.filter((s) => !s.palletId).length;
   return (
@@ -21,10 +23,16 @@ export function RackGrid({
       <div className="grid grid-cols-3 gap-2">
         {rack.slots.map((slot) => {
           const held = !!slot.palletId && heldPalletIds?.includes(slot.palletId);
+          const load = slot.palletId
+            ? loads?.find((l) => l.palletId === slot.palletId)
+            : undefined;
+          const title = slot.palletId
+            ? `${slot.palletId}${load ? ` — ${load.productName} — ${load.quantity.toLocaleString()} units` : ''}${held ? ' — on hold' : ''}`
+            : undefined;
           return (
             <div
               key={slot.index}
-              className={`flex h-14 items-center justify-center rounded-md border text-[11px] font-mono ${
+              className={`flex h-14 flex-col items-center justify-center rounded-md border px-1 text-center text-[11px] font-mono leading-tight ${
                 slot.palletId
                   ? held
                     ? 'border-rose-600 bg-rose-950/40 text-rose-300 ring-2 ring-rose-500/40'
@@ -33,9 +41,14 @@ export function RackGrid({
                       : 'border-emerald-800 bg-emerald-950/40 text-emerald-300'
                   : 'border-dashed border-slate-700 text-slate-600'
               }`}
-              title={held ? 'On hold' : undefined}
+              title={title}
             >
-              {slot.palletId ?? '—'}
+              <span>{slot.palletId ?? '—'}</span>
+              {load && (
+                <span className="truncate text-[9px] font-sans opacity-80">
+                  {load.productName} · {load.quantity.toLocaleString()}
+                </span>
+              )}
             </div>
           );
         })}

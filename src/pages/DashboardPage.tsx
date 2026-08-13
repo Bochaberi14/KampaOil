@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
-import { countFreeRackSlots, countRackedPallets } from '../engine/rules';
+import { countFreeRackSlots, countRackedPallets, summarizePallets } from '../engine/rules';
 import { ROLE_BLURB } from '../rbac';
 
 export function DashboardPage() {
@@ -23,6 +23,7 @@ export function DashboardPage() {
   const freePallets = pallets.filter((p) => p.status === 'Empty').length;
   const rackedCount = countRackedPallets(racks);
   const freeSlots = countFreeRackSlots(racks);
+  const palletSummary = summarizePallets(pallets);
 
   const guideSteps = [
     {
@@ -122,6 +123,33 @@ export function DashboardPage() {
         />
       </div>
 
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Pallet inventory
+          </h2>
+          <span className="text-xs text-slate-500">{palletSummary.total} pallets total</span>
+        </div>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatTile label="Total pallets" value={palletSummary.total} />
+          <StatTile label="Empty pallets" value={palletSummary.empty} />
+          <StatTile label="Occupied pallets" value={palletSummary.occupied} />
+          <StatTile label="Stages in use" value={palletSummary.byStage.length} />
+        </div>
+        {palletSummary.byStage.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {palletSummary.byStage.map((s) => (
+              <span
+                key={s.label}
+                className="rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1 text-xs text-slate-300"
+              >
+                {s.label}: <span className="font-semibold text-slate-100">{s.count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Production orders (from SAP)
@@ -183,7 +211,7 @@ export function DashboardPage() {
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {racks.map((r) => (
-            <RackGrid key={r.id} rack={r} />
+            <RackGrid key={r.id} rack={r} loads={loads} />
           ))}
         </div>
       </div>

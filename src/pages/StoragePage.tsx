@@ -12,6 +12,7 @@ type ReleaseWizardStep = 'rack' | 'pallet';
 export function StoragePage() {
   const pallets = useWarehouseStore((s) => s.pallets);
   const racks = useWarehouseStore((s) => s.racks);
+  const loads = useWarehouseStore((s) => s.loads);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const scanPalletLeavingLine = useWarehouseStore((s) => s.scanPalletLeavingLine);
   const scanPalletToRack = useWarehouseStore((s) => s.scanPalletToRack);
@@ -293,7 +294,7 @@ export function StoragePage() {
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {racks.map((rack) => (
-            <RackGrid key={rack.id} rack={rack} highlightPalletId={wizard.palletId ?? undefined} />
+            <RackGrid key={rack.id} rack={rack} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
           ))}
         </div>
       </div>
