@@ -69,10 +69,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // verifies it against the handover printout, and signs alongside the
   // driver — there's no separate Clerk step in this flow.
   Loader: ['view:dashboard', 'view:loader', 'plan:dispatch', 'sign:dispatch', 'view:barcodes'],
-  // Narrower than the full Manager/HOD/Director supervisor bundle — QA HOD
-  // owns Hold & Recall approvals specifically, not direct-dispatch approval
+  // QA owns Hold & Recall approvals specifically, not direct-dispatch approval
   // or supervisor sign-off.
-  'QA HOD': [
+  QA: [
     'view:dashboard',
     'view:hold',
     'view:recall',
@@ -82,10 +81,6 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'view:barcodes',
   ],
   'Customer Return Clerk': ['view:dashboard', 'view:returns', 'report:return', 'view:barcodes'],
-  // Cross-department visibility into returns — see canViewReturn below —
-  // but no other warehouse permissions; these roles exist purely for that
-  // oversight, not to run any part of the floor.
-  'Factory Manager': ['view:dashboard', 'view:returns'],
   'Sales Manager': ['view:dashboard', 'view:returns'],
 };
 
@@ -96,9 +91,8 @@ export const ROLE_BLURB: Record<Role, string> = {
   Picker: 'Scan & move pallets — production, storage, loading bay, dispatch',
   Clerk: 'Inventory reports & discrepancy reporting — can flag a product for hold, not approve one',
   Loader: 'Coordinates dispatch end-to-end — releases orders, assigns pickers, registers & verifies the vehicle, signs the handover',
-  'QA HOD': 'Owns Hold & Recall — approve/reject holds, decide recall outcomes',
+  QA: 'Quality assurance — approve/reject holds, decide recall outcomes',
   'Customer Return Clerk': 'Log customer returns — product, quantity, defect photo & remarks',
-  'Factory Manager': 'Factory-wide visibility into returned goods across every department',
   'Sales Manager': 'Sales-side visibility into returns for customer/order reconciliation',
 };
 

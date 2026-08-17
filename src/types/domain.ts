@@ -5,9 +5,8 @@ export type Role =
   | 'Director'
   | 'Clerk'
   | 'Loader'
-  | 'QA HOD'
+  | 'QA'
   | 'Customer Return Clerk'
-  | 'Factory Manager'
   | 'Sales Manager';
 
 export type Department = 'Oil & Refinery' | 'Edibles' | 'Soap' | 'Other';

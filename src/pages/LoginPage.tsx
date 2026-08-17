@@ -95,18 +95,33 @@ export function LoginPage() {
     setError('');
   }
 
+  const departments = ['Oil & Refinery', 'Edibles', 'Soap', 'Other'];
+  const departmentIcons: Record<string, string> = {
+    'Oil & Refinery': '🛢️',
+    'Edibles': '🥘',
+    'Soap': '🧼',
+    'Other': '📦',
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
       <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-lg shadow-black/30">
         <h1 className="text-2xl font-bold text-white">Kapa Oil</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Warehousing & Production Execution — Prototype
+          Warehousing & Production Execution — Multi-Department Platform
         </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {departments.map((dept) => (
+            <span key={dept} className="inline-flex items-center gap-1 rounded-full bg-slate-800/50 px-2 py-1 text-xs text-slate-300">
+              {departmentIcons[dept]} {dept}
+            </span>
+          ))}
+        </div>
 
         {step === 'select' && (
           <>
             <div className="mt-8 space-y-3">
-              {USERS.map((u) => (
+              {USERS.filter((u) => u.role !== 'Picker').map((u) => (
                 <button
                   key={u.id}
                   onClick={() => handleSelectUser(u.id)}
@@ -125,6 +140,15 @@ export function LoginPage() {
                 </button>
               ))}
             </div>
+
+            {/* Picker Access Info */}
+            <div className="mt-6 rounded-lg border border-amber-800 bg-amber-950/30 px-4 py-3">
+              <div className="text-xs font-semibold text-amber-300">📱 Picker Access</div>
+              <p className="mt-1 text-xs text-amber-200/80">
+                Pickers use barcode scanner devices (Zebra TC53/TC58) for warehouse operations. No login required.
+              </p>
+            </div>
+
             <p className="mt-6 text-center text-xs text-slate-600">
               Enterprise-grade security with MFA authentication
             </p>
@@ -135,9 +159,16 @@ export function LoginPage() {
           <>
             <div className="mt-8">
               <div className="rounded-lg bg-slate-800/50 px-4 py-3">
-                <div className="text-xs text-slate-400">Signed in as</div>
+                <div className="text-xs text-slate-400">User</div>
                 <div className="mt-1 font-semibold text-slate-100">{selectedUser.name}</div>
-                <div className="text-xs text-slate-500">{selectedUser.role}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-500">{selectedUser.role}</div>
+                  {selectedUser.department && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
+                      {departmentIcons[selectedUser.department]} {selectedUser.department}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="mt-6 space-y-4">
@@ -185,6 +216,14 @@ export function LoginPage() {
               <div className="rounded-lg bg-slate-800/50 px-4 py-3">
                 <div className="text-xs text-slate-400">User</div>
                 <div className="mt-1 font-semibold text-slate-100">{selectedUser.name}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-500">{selectedUser.role}</div>
+                  {selectedUser.department && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
+                      {departmentIcons[selectedUser.department]} {selectedUser.department}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="mt-6">

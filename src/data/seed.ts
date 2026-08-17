@@ -84,17 +84,16 @@ export const LOADING_BAY_SHELVES: Shelf[] = [
 
 export const USERS: User[] = [
   { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Edibles', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Soap', mfaEnabled: true, loginAttempts: 0 },
   { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Edibles', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod3', name: 'Lucy Wambui', role: 'HOD', department: 'Soap', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'dir1', name: 'Michael Ochieng', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'dir1', name: 'Winnie Bochaberi', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
   { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
   { id: 'load1', name: 'Brian Kiptoo', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'qahod1', name: 'Fatuma Noor', role: 'QA HOD', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'qa1', name: 'Fatuma Noor', role: 'QA', mfaEnabled: true, loginAttempts: 0 },
   { id: 'ret1', name: 'Wanjiku Njeri', role: 'Customer Return Clerk', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'facmgr1', name: 'Peter Kamau', role: 'Factory Manager', mfaEnabled: true, loginAttempts: 0 },
   { id: 'salesmgr1', name: 'Esther Njoroge', role: 'Sales Manager', mfaEnabled: true, loginAttempts: 0 },
 ];
 
