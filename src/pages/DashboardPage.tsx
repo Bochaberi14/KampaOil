@@ -4,6 +4,7 @@ import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
 import { countFreeRackSlots, countRackedPallets, summarizePallets } from '../engine/rules';
 import { ROLE_BLURB } from '../rbac';
+import { USERS } from '../data/seed';
 
 export function DashboardPage() {
   const currentUser = useWarehouseStore((s) => s.currentUser);
@@ -24,6 +25,37 @@ export function DashboardPage() {
   const rackedCount = countRackedPallets(racks);
   const freeSlots = countFreeRackSlots(racks);
   const palletSummary = summarizePallets(pallets);
+
+  // Nobody currently has a bird's-eye view across pickers — Storage only
+  // shows "my tasks" for whoever's logged in. This gives a Manager/HOD/
+  // Director/Loader a read of who's actively picking vs. free, using data
+  // the store already tracks (no new state needed).
+  const pendingAcceptanceCount = pickTasks.filter((t) => t.status === 'PendingAcceptance').length;
+  const pickerStatuses = USERS.filter((u) => u.role === 'Picker').map((picker) => {
+    const myTasks = pickTasks
+      .filter((t) => t.assignedPickerId === picker.id)
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const active = myTasks.find((t) => t.status === 'Accepted');
+    if (active) {
+      const released = active.items.filter((i) => i.picked).length;
+      return {
+        userId: picker.id,
+        name: picker.name,
+        status: 'Picking',
+        detail: `${active.salesOrderId} — ${released}/${active.items.length} released`,
+      };
+    }
+    const lastCompleted = myTasks.find((t) => t.status === 'Completed');
+    return {
+      userId: picker.id,
+      name: picker.name,
+      status: 'Available',
+      detail: lastCompleted
+        ? `Last completed: ${lastCompleted.salesOrderId} · ${lastCompleted.items.length} pallet(s)`
+        : 'No tasks yet',
+    };
+  });
 
   const guideSteps = [
     {
@@ -46,7 +78,7 @@ export function DashboardPage() {
     },
     {
       label: '4 · Dispatch',
-      hint: 'Scan bay rack → pallet → truck to dispatch and sync to SAP.',
+      hint: 'Picker scans LINE 001 once picking is complete, then the Loader registers/verifies the vehicle and signs the handover.',
       to: '/dispatch',
       done: manifests.length > 0,
     },
@@ -118,9 +150,31 @@ export function DashboardPage() {
         <StatTile label="Pallets in storage" value={rackedCount} />
         <StatTile label="Free rack slots" value={freeSlots} />
         <StatTile
-          label="Trucks dispatched"
-          value={`${trucks.filter((t) => t.status === 'Dispatched').length} / ${trucks.length}`}
+          label="Trucks staged"
+          value={`${trucks.filter((t) => t.status === 'Staged').length} / ${trucks.length}`}
         />
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Picker activity
+          </h2>
+          <span className="text-xs text-slate-500">
+            {pendingAcceptanceCount} task{pendingAcceptanceCount === 1 ? '' : 's'} awaiting acceptance
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {pickerStatuses.map((p) => (
+            <div key={p.userId} className="rounded-xl border border-slate-800 bg-slate-800/60 p-4">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-200">{p.name}</span>
+                <StatusPill status={p.status} />
+              </div>
+              <p className="mt-1 text-xs text-slate-400">{p.detail}</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">

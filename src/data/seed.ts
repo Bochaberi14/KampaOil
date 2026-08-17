@@ -1,5 +1,6 @@
 import type {
   Batch,
+  Department,
   HoldRecord,
   Line,
   Load,
@@ -8,20 +9,93 @@ import type {
   Rack,
   RecallCase,
   SalesOrder,
+  Shelf,
   Truck,
   User,
+  Zone,
+  ZoneName,
 } from '../types/domain';
+
+export const DEPARTMENTS: Department[] = ['Oil & Refinery', 'Edibles', 'Soap', 'Other'];
 
 // Units per full pallet — drives the "load confirms only when pallet is full" rule.
 export const PALLET_CAPACITY = 100;
 
+// WAREHOUSE ZONING WITH STANDARD NAMING CONVENTION
+// BIN-{Letter}-{Zone Name}-S-{Shelf#}-R-{Rack#}
+// Storage: BIN-A (Oils), BIN-B (Margarine), BIN-C (Soaps), BIN-D (Specialty)
+// Loading Bay: BIN-A through BIN-D (product zones) + BIN-E (returns)
+// Each zone: up to 3 shelves (S-01, S-02, S-03), each shelf: up to 3 racks
+
+const createZone = (
+  id: string,
+  name: ZoneName,
+  warehouseType: 'Storage' | 'LoadingBay',
+  department: Department | 'Returns',
+  requiresRefrigeration: boolean,
+): Zone => ({
+  id,
+  name,
+  warehouseType,
+  department,
+  requiresRefrigeration,
+});
+
+const createShelf = (id: string, zoneId: string, shelfNum: string, rackIds: string[]): Shelf => ({
+  id,
+  zoneId,
+  index: parseInt(shelfNum),
+  rackIds,
+});
+
+// STORAGE ZONES: BIN-A through BIN-D
+export const STORAGE_ZONES: Zone[] = [
+  createZone('BIN-A', 'Edible Oils', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-B', 'Margarine & Shortening', 'Storage', 'Oil & Refinery', true),
+  createZone('BIN-C', 'Detergents & Soaps', 'Storage', 'Soap', false),
+  createZone('BIN-D', 'Specialty Products', 'Storage', 'Other', false),
+];
+
+// STORAGE SHELVES: Each zone has 1 shelf (S-01) with 3 racks
+export const STORAGE_SHELVES: Shelf[] = [
+  createShelf('BIN-A-OILS-S-01', 'BIN-A', '01', ['BIN-A-OILS-S-01-R-01', 'BIN-A-OILS-S-01-R-02', 'BIN-A-OILS-S-01-R-03']),
+  createShelf('BIN-B-MARG-S-01', 'BIN-B', '01', ['BIN-B-MARG-S-01-R-01', 'BIN-B-MARG-S-01-R-02', 'BIN-B-MARG-S-01-R-03']),
+  createShelf('BIN-C-SOAP-S-01', 'BIN-C', '01', ['BIN-C-SOAP-S-01-R-01', 'BIN-C-SOAP-S-01-R-02', 'BIN-C-SOAP-S-01-R-03']),
+  createShelf('BIN-D-SPEC-S-01', 'BIN-D', '01', ['BIN-D-SPEC-S-01-R-01', 'BIN-D-SPEC-S-01-R-02', 'BIN-D-SPEC-S-01-R-03']),
+];
+
+// LOADING BAY ZONES: BIN-A through BIN-E (includes Returns)
+export const LOADING_BAY_ZONES: Zone[] = [
+  createZone('BIN-A-BAY', 'Edible Oils', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-B-BAY', 'Margarine & Shortening', 'LoadingBay', 'Oil & Refinery', true),
+  createZone('BIN-C-BAY', 'Detergents & Soaps', 'LoadingBay', 'Soap', false),
+  createZone('BIN-D-BAY', 'Specialty Products', 'LoadingBay', 'Other', false),
+  createZone('BIN-E-BAY', 'Returns', 'LoadingBay', 'Returns', false),
+];
+
+// LOADING BAY SHELVES: Each zone has 1 shelf with 3 racks (6-pallet capacity each = 18 per zone)
+export const LOADING_BAY_SHELVES: Shelf[] = [
+  createShelf('BIN-A-BAY-OILS-S-01', 'BIN-A-BAY', '01', ['BIN-A-BAY-OILS-S-01-R-01', 'BIN-A-BAY-OILS-S-01-R-02', 'BIN-A-BAY-OILS-S-01-R-03']),
+  createShelf('BIN-B-BAY-MARG-S-01', 'BIN-B-BAY', '01', ['BIN-B-BAY-MARG-S-01-R-01', 'BIN-B-BAY-MARG-S-01-R-02', 'BIN-B-BAY-MARG-S-01-R-03']),
+  createShelf('BIN-C-BAY-SOAP-S-01', 'BIN-C-BAY', '01', ['BIN-C-BAY-SOAP-S-01-R-01', 'BIN-C-BAY-SOAP-S-01-R-02', 'BIN-C-BAY-SOAP-S-01-R-03']),
+  createShelf('BIN-D-BAY-SPEC-S-01', 'BIN-D-BAY', '01', ['BIN-D-BAY-SPEC-S-01-R-01', 'BIN-D-BAY-SPEC-S-01-R-02', 'BIN-D-BAY-SPEC-S-01-R-03']),
+  createShelf('BIN-E-BAY-RET-S-01', 'BIN-E-BAY', '01', ['BIN-E-BAY-RET-S-01-R-01', 'BIN-E-BAY-RET-S-01-R-02']),
+];
+
 export const USERS: User[] = [
-  { id: 'op1', name: 'Alex Mwangi', role: 'Picker' },
-  { id: 'pick1', name: 'Sam Otieno', role: 'Picker' },
-  { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager' },
-  { id: 'hod1', name: 'Priya Kimani', role: 'HOD' },
-  { id: 'dir1', name: 'Michael Ochieng', role: 'Director' },
-  { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk' },
+  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Edibles', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Edibles', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod3', name: 'Lucy Wambui', role: 'HOD', department: 'Soap', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'dir1', name: 'Michael Ochieng', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'load1', name: 'Brian Kiptoo', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'qahod1', name: 'Fatuma Noor', role: 'QA HOD', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'ret1', name: 'Wanjiku Njeri', role: 'Customer Return Clerk', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'facmgr1', name: 'Peter Kamau', role: 'Factory Manager', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'salesmgr1', name: 'Esther Njoroge', role: 'Sales Manager', mfaEnabled: true, loginAttempts: 0 },
 ];
 
 // The only valid "Rework" recall destination — a dedicated line for
@@ -30,38 +104,10 @@ export const USERS: User[] = [
 export const EXCEPTION_LINE_ID = 'L-EXC';
 
 export const INITIAL_LINES: Line[] = [
-  {
-    id: 'L001',
-    name: 'Line 1',
-    status: 'Free',
-    assignedSku: 'RINA1L',
-    assignedProductName: 'Rina 1L',
-    activeProductionOrderId: null,
-  },
-  {
-    id: 'L002',
-    name: 'Line 2',
-    status: 'Free',
-    assignedSku: 'KASUKU1KG',
-    assignedProductName: 'Kasuku 1kg',
-    activeProductionOrderId: null,
-  },
-  {
-    id: 'L003',
-    name: 'Line 3',
-    status: 'Free',
-    assignedSku: 'PRESTIGE500G',
-    assignedProductName: 'Prestige 500g',
-    activeProductionOrderId: null,
-  },
-  {
-    id: EXCEPTION_LINE_ID,
-    name: 'Exception Line',
-    status: 'Free',
-    assignedSku: null,
-    assignedProductName: null,
-    activeProductionOrderId: null,
-  },
+  { id: 'L001', name: 'Line 1', status: 'Free', activeProductionOrderId: null },
+  { id: 'L002', name: 'Line 2', status: 'Free', activeProductionOrderId: null },
+  { id: 'L003', name: 'Line 3', status: 'Free', activeProductionOrderId: null },
+  { id: EXCEPTION_LINE_ID, name: 'Exception Line', status: 'Free', activeProductionOrderId: null },
 ];
 
 // Simulates production orders already pulled from SAP.
@@ -78,8 +124,8 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
   },
   {
     id: 'PO002',
-    sku: 'KASUKU1KG',
-    productName: 'Kasuku 1kg',
+    sku: 'TOSS500G',
+    productName: 'Toss 500g',
     lineId: 'L002',
     targetQty: 5000,
     createdAt: '2026-07-20T08:00:00.000Z',
@@ -98,7 +144,10 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
   },
 ];
 
-// Simulates sales orders already pulled from SAP.
+// SAP does NOT know the vehicle in advance — it's only known once the
+// customer/driver physically arrives to collect, at which point the Loader
+// registers it (see registerVehicleForSalesOrder). Every order therefore
+// starts with no assigned vehicle.
 export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   {
     id: 'SO001',
@@ -106,6 +155,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     sku: 'RINA1L',
     productName: 'Rina 1L',
     qty: 2000,
+    releasedQty: 0,
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:00:00.000Z',
@@ -115,9 +165,10 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   {
     id: 'SO002',
     customer: 'Customer XYZ',
-    sku: 'KASUKU1KG',
-    productName: 'Kasuku 1kg',
+    sku: 'TOSS500G',
+    productName: 'Toss 500g',
     qty: 1500,
+    releasedQty: 0,
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:05:00.000Z',
@@ -130,6 +181,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     sku: 'PRESTIGE500G',
     productName: 'Prestige 500g',
     qty: 1000,
+    releasedQty: 0,
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:10:00.000Z',
@@ -138,29 +190,75 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   },
 ];
 
-const RACK_IDS = ['R-A', 'R-B', 'R-C'];
 const SLOTS_PER_RACK = 6;
+const SLOTS_PER_BAY_RACK = 6; // Changed from 4 to 6 for better utilization
 
-export const INITIAL_RACKS: Rack[] = RACK_IDS.map((id) => ({
-  id,
-  name: `Rack ${id.split('-')[1]}`,
-  slots: Array.from({ length: SLOTS_PER_RACK }, (_, i) => ({ index: i, palletId: null })),
-}));
+// Create zone-aware storage racks with standard naming (3 racks per zone)
+const createStorageRacks = (): Rack[] => {
+  const rackMap: Record<string, { zoneId: string; shelfId: string }> = {
+    'BIN-A-OILS-S-01-R-01': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
+    'BIN-A-OILS-S-01-R-02': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
+    'BIN-A-OILS-S-01-R-03': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
+    'BIN-B-MARG-S-01-R-01': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
+    'BIN-B-MARG-S-01-R-02': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
+    'BIN-B-MARG-S-01-R-03': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
+    'BIN-C-SOAP-S-01-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
+    'BIN-C-SOAP-S-01-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
+    'BIN-C-SOAP-S-01-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
+    'BIN-D-SPEC-S-01-R-01': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
+    'BIN-D-SPEC-S-01-R-02': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
+    'BIN-D-SPEC-S-01-R-03': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
+  };
 
-const BAY_RACK_IDS = ['BAY-A', 'BAY-B'];
-const SLOTS_PER_BAY_RACK = 4;
+  return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({
+    id,
+    name: id,
+    zoneId,
+    shelfId,
+    slots: Array.from({ length: SLOTS_PER_RACK }, (_, i) => ({ index: i, palletId: null })),
+  }));
+};
 
-export const INITIAL_BAY_RACKS: Rack[] = BAY_RACK_IDS.map((id) => ({
-  id,
-  name: `Bay Rack ${id.split('-')[1]}`,
-  slots: Array.from({ length: SLOTS_PER_BAY_RACK }, (_, i) => ({ index: i, palletId: null })),
-}));
+export const INITIAL_RACKS: Rack[] = createStorageRacks();
 
-export const INITIAL_TRUCKS: Truck[] = [
-  { id: 'TRK-100', plate: 'KDA 100X', status: 'Waiting', salesOrderId: null, dispatchLine: 'LINE-001', tempDispatchBarcode: null },
-  { id: 'TRK-101', plate: 'KDB 201Y', status: 'Waiting', salesOrderId: null, dispatchLine: 'LINE-002', tempDispatchBarcode: null },
-  { id: 'TRK-102', plate: 'KDC 302Z', status: 'Waiting', salesOrderId: null, dispatchLine: 'LINE-003', tempDispatchBarcode: null },
-];
+// Create zone-aware loading bay racks with standard naming (3 racks per zone, 6-pallet capacity)
+const createBayRacks = (): Rack[] => {
+  const rackMap: Record<string, { zoneId: string; shelfId: string }> = {
+    'BIN-A-BAY-OILS-S-01-R-01': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
+    'BIN-A-BAY-OILS-S-01-R-02': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
+    'BIN-A-BAY-OILS-S-01-R-03': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
+    'BIN-B-BAY-MARG-S-01-R-01': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
+    'BIN-B-BAY-MARG-S-01-R-02': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
+    'BIN-B-BAY-MARG-S-01-R-03': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
+    'BIN-C-BAY-SOAP-S-01-R-01': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
+    'BIN-C-BAY-SOAP-S-01-R-02': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
+    'BIN-C-BAY-SOAP-S-01-R-03': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
+    'BIN-D-BAY-SPEC-S-01-R-01': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
+    'BIN-D-BAY-SPEC-S-01-R-02': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
+    'BIN-D-BAY-SPEC-S-01-R-03': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
+    'BIN-E-BAY-RET-S-01-R-01': { zoneId: 'BIN-E-BAY', shelfId: 'BIN-E-BAY-RET-S-01' },
+    'BIN-E-BAY-RET-S-01-R-02': { zoneId: 'BIN-E-BAY', shelfId: 'BIN-E-BAY-RET-S-01' },
+  };
+
+  return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({
+    id,
+    name: id,
+    zoneId,
+    shelfId,
+    slots: Array.from({ length: SLOTS_PER_BAY_RACK }, (_, i) => ({ index: i, palletId: null })),
+  }));
+};
+
+export const INITIAL_BAY_RACKS: Rack[] = createBayRacks();
+
+// Single physical dispatch line for this demo — every vehicle stages at the
+// same LINE 001.
+export const DISPATCH_LINE = 'LINE 001';
+
+// Not a fixed fleet — a Truck record is created ad hoc by the Loader when a
+// collecting vehicle physically arrives (registerVehicleForSalesOrder), so
+// there's nothing to seed here.
+export const INITIAL_TRUCKS: Truck[] = [];
 
 const PALLET_COUNT = 24;
 

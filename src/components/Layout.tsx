@@ -3,17 +3,24 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ToastStack } from './ToastStack';
 import { SapSyncPanel } from './SapSyncPanel';
-import { can, type Permission } from '../rbac';
+import { can, canViewReturn, type Permission } from '../rbac';
 
 const NAV: { to: string; label: string; permission: Permission }[] = [
   { to: '/dashboard', label: 'Dashboard', permission: 'view:dashboard' },
   { to: '/production', label: '1 · Production', permission: 'view:production' },
   { to: '/storage', label: '2 · Storage', permission: 'view:storage' },
   { to: '/loading-bay', label: '3 · Loading Bay', permission: 'view:loading-bay' },
+  { to: '/picker-tasks', label: 'My Tasks', permission: 'execute:pickTask' },
   { to: '/dispatch', label: '4 · Dispatch', permission: 'view:dispatch' },
   { to: '/hold', label: '5 · Hold', permission: 'view:hold' },
   { to: '/recall', label: '6 · Recall', permission: 'view:recall' },
   { to: '/audit', label: '7 · Audit', permission: 'view:audit' },
+  { to: '/zones', label: 'Zones', permission: 'view:audit' },
+  { to: '/loader', label: 'Loader', permission: 'view:loader' },
+  { to: '/returns', label: 'Returns', permission: 'view:returns' },
+  { to: '/barcodes', label: 'Barcodes', permission: 'view:barcodes' },
+  { to: '/security', label: '🔒 Security', permission: 'view:security' },
+  { to: '/security-demo', label: '🔐 Security Demo', permission: 'view:security' },
 ];
 
 export function Layout() {
@@ -21,8 +28,8 @@ export function Layout() {
   const logout = useWarehouseStore((s) => s.logout);
   const resetDemo = useWarehouseStore((s) => s.resetDemo);
   const pushToast = useWarehouseStore((s) => s.pushToast);
-  const pendingAcceptanceCount = useWarehouseStore(
-    (s) => s.pickTasks.filter((t) => t.status === 'PendingAcceptance').length,
+  const myAssignedTasksCount = useWarehouseStore(
+    (s) => s.pickTasks.filter((t) => t.status === 'Accepted' && t.assignedPickerId === user?.id).length,
   );
   const pendingApprovalCount = useWarehouseStore(
     (s) => s.directDispatchApprovals.filter((a) => a.status === 'PendingApproval').length,
@@ -30,37 +37,52 @@ export function Layout() {
   const pendingRecallPickerCount = useWarehouseStore(
     (s) => s.recallCases.filter((r) => r.status === 'AwaitingPickerAction').length,
   );
+  // Department-scoped for a HOD, all of them for Factory Manager/Sales
+  // Manager/Director/the Customer Return Clerk who logs them — see
+  // canViewReturn in rbac.ts for the routing rule.
+  const visibleReturnsCount = useWarehouseStore(
+    (s) => s.customerReturns.filter((r) => canViewReturn(user ?? undefined, r)).length,
+  );
   const navigate = useNavigate();
   const visibleNav = NAV.filter((item) => can(user?.role, item.permission));
 
   const badgeByPath: Record<string, number> = {
-    '/storage': pendingAcceptanceCount,
+    '/picker-tasks': myAssignedTasksCount,
     '/dispatch': pendingApprovalCount,
     '/recall': pendingRecallPickerCount,
+    '/returns': visibleReturnsCount,
   };
 
   // Announce what's awaiting this role the moment they log in — and again if
   // more piles up while they're still signed in (e.g. a second shortfall gets
   // approved while a Picker is mid-session).
-  const notifiedRef = useRef<{ userId: string | null; acceptance: number; approval: number; recallPicker: number }>({
+  const notifiedRef = useRef<{
+    userId: string | null;
+    myTasks: number;
+    approval: number;
+    recallPicker: number;
+    returns: number;
+  }>({
     userId: null,
-    acceptance: 0,
+    myTasks: 0,
     approval: 0,
     recallPicker: 0,
+    returns: 0,
   });
   useEffect(() => {
     if (!user) {
-      notifiedRef.current = { userId: null, acceptance: 0, approval: 0, recallPicker: 0 };
+      notifiedRef.current = { userId: null, myTasks: 0, approval: 0, recallPicker: 0, returns: 0 };
       return;
     }
     const isNewSession = notifiedRef.current.userId !== user.id;
-    const prevAcceptance = isNewSession ? 0 : notifiedRef.current.acceptance;
+    const prevMyTasks = isNewSession ? 0 : notifiedRef.current.myTasks;
     const prevApproval = isNewSession ? 0 : notifiedRef.current.approval;
     const prevRecallPicker = isNewSession ? 0 : notifiedRef.current.recallPicker;
+    const prevReturns = isNewSession ? 0 : notifiedRef.current.returns;
 
-    if (can(user.role, 'execute:pickTask') && pendingAcceptanceCount > prevAcceptance) {
+    if (can(user.role, 'execute:pickTask') && myAssignedTasksCount > prevMyTasks) {
       pushToast(
-        `${pendingAcceptanceCount} pick task${pendingAcceptanceCount === 1 ? '' : 's'} awaiting your acceptance in Storage`,
+        `${myAssignedTasksCount} pick task${myAssignedTasksCount === 1 ? '' : 's'} assigned to you`,
         'info',
       );
     }
@@ -76,13 +98,20 @@ export function Layout() {
         'info',
       );
     }
+    if (user.role !== 'Customer Return Clerk' && visibleReturnsCount > prevReturns) {
+      pushToast(
+        `${visibleReturnsCount} returned product${visibleReturnsCount === 1 ? '' : 's'} awaiting your review`,
+        'info',
+      );
+    }
     notifiedRef.current = {
       userId: user.id,
-      acceptance: pendingAcceptanceCount,
+      myTasks: myAssignedTasksCount,
       approval: pendingApprovalCount,
       recallPicker: pendingRecallPickerCount,
+      returns: visibleReturnsCount,
     };
-  }, [user, pendingAcceptanceCount, pendingApprovalCount, pendingRecallPickerCount, pushToast]);
+  }, [user, myAssignedTasksCount, pendingApprovalCount, pendingRecallPickerCount, visibleReturnsCount, pushToast]);
 
   function handleLogout() {
     logout();

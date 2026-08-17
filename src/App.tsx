@@ -7,10 +7,17 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProductionPage } from './pages/ProductionPage';
 import { StoragePage } from './pages/StoragePage';
 import { LoadingBayPage } from './pages/LoadingBayPage';
+import { PickerTasksPage } from './pages/PickerTasksPage';
 import { DispatchPage } from './pages/DispatchPage';
 import { HoldPage } from './pages/HoldPage';
 import { RecallPage } from './pages/RecallPage';
 import { AuditPage } from './pages/AuditPage';
+import { LoaderPage } from './pages/LoaderPage';
+import { ReturnsPage } from './pages/ReturnsPage';
+import { BarcodesPage } from './pages/BarcodesPage';
+import { ZoneInventoryPage } from './pages/ZoneInventoryPage';
+import { SecurityDashboardPage } from './pages/SecurityDashboardPage';
+import { SecurityDemoPage } from './pages/SecurityDemoPage';
 
 function App() {
   return (
@@ -52,6 +59,14 @@ function App() {
               }
             />
             <Route
+              path="/picker-tasks"
+              element={
+                <RoleRoute permission="execute:pickTask">
+                  <PickerTasksPage />
+                </RoleRoute>
+              }
+            />
+            <Route
               path="/dispatch"
               element={
                 <RoleRoute permission="view:dispatch">
@@ -80,6 +95,54 @@ function App() {
               element={
                 <RoleRoute permission="view:audit">
                   <AuditPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/loader"
+              element={
+                <RoleRoute permission="view:loader">
+                  <LoaderPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/returns"
+              element={
+                <RoleRoute permission="view:returns">
+                  <ReturnsPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/barcodes"
+              element={
+                <RoleRoute permission="view:barcodes">
+                  <BarcodesPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/zones"
+              element={
+                <RoleRoute permission="view:audit">
+                  <ZoneInventoryPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/security"
+              element={
+                <RoleRoute permission="view:security">
+                  <SecurityDashboardPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/security-demo"
+              element={
+                <RoleRoute permission="view:security">
+                  <SecurityDemoPage />
                 </RoleRoute>
               }
             />

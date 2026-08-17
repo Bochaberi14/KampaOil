@@ -1,9 +1,77 @@
-export type Role = 'Picker' | 'Manager' | 'HOD' | 'Director' | 'Clerk';
+export type Role =
+  | 'Picker'
+  | 'Manager'
+  | 'HOD'
+  | 'Director'
+  | 'Clerk'
+  | 'Loader'
+  | 'QA HOD'
+  | 'Customer Return Clerk'
+  | 'Factory Manager'
+  | 'Sales Manager';
+
+export type Department = 'Oil & Refinery' | 'Edibles' | 'Soap' | 'Other';
+
+export type ZoneName = 'Edible Oils' | 'Margarine & Shortening' | 'Detergents & Soaps' | 'Specialty Products' | 'Returns';
+
+export interface Zone {
+  id: string;
+  name: ZoneName;
+  warehouseType: 'Storage' | 'LoadingBay';
+  department: Department | 'Returns';
+  requiresRefrigeration: boolean;
+}
+
+export interface Shelf {
+  id: string;
+  zoneId: string;
+  index: number; // 0, 1, 2
+  rackIds: string[]; // rack IDs in this shelf
+}
 
 export interface User {
   id: string;
   name: string;
   role: Role;
+  // Meaningful for: department-scoped HODs (returns routing), Pickers (task
+  // assignment must match product dept), QA HOD (approval scope).
+  department?: Department;
+  // Security fields
+  mfaEnabled: boolean;
+  mfaSecret?: string; // TOTP secret (encrypted)
+  loginAttempts: number;
+  lockedUntil?: string; // ISO timestamp
+  lastLoginAt?: string;
+}
+
+// Security event types
+export type SecurityEventType =
+  | 'LOGIN_SUCCESS'
+  | 'LOGIN_FAILED'
+  | 'ACCOUNT_LOCKED'
+  | 'MFA_FAILED'
+  | 'PERMISSION_DENIED'
+  | 'HOLD_APPROVED'
+  | 'RETURN_DECIDED'
+  | 'DISPATCH_AUTHORIZED'
+  | 'SUSPICIOUS_ACTIVITY';
+
+export interface SecurityEvent {
+  id: string;
+  type: SecurityEventType;
+  userId?: string;
+  userName?: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  details: string;
+  ipAddress?: string;
+  timestamp: string;
+}
+
+export interface SessionToken {
+  userId: string;
+  role: Role;
+  iat: number; // issued at
+  exp: number; // expiration
 }
 
 export type PalletStatus =
@@ -14,6 +82,7 @@ export type PalletStatus =
   | 'InTransitToBay'
   | 'OnBay'
   | 'InTransitToTruck'
+  | 'StagedForDispatch'
   | 'InRecall'
   | 'Scrapped';
 
@@ -24,6 +93,10 @@ export type PalletLocation =
   | { type: 'Rack'; rackId: string; slotIndex: number }
   | { type: 'BayRack'; bayRackId: string; slotIndex: number }
   | { type: 'Truck'; truckId: string }
+  // Staged at the physical dispatch line, waiting for the (out-of-scope)
+  // physical loading onto the vehicle — the pallet itself is never
+  // considered "in" the truck.
+  | { type: 'DispatchLine'; dispatchLine: string; truckId: string }
   | { type: 'Recall' }
   | { type: 'Scrapped' };
 
@@ -37,12 +110,12 @@ export interface Pallet {
   holdId: string | null;
 }
 
+// A line has no fixed product — it runs whatever the operator scans onto it
+// next (activeProductionOrderId), same as a real changeover.
 export interface Line {
   id: string;
   name: string;
   status: 'Free' | 'Running';
-  assignedSku: string | null;
-  assignedProductName: string | null;
   activeProductionOrderId: string | null;
 }
 
@@ -89,18 +162,29 @@ export interface RackSlot {
 export interface Rack {
   id: string;
   name: string;
+  zoneId?: string; // zone this rack belongs to
+  shelfId?: string; // shelf this rack is on (within zone)
   slots: RackSlot[];
 }
 
 export interface Truck {
   id: string;
+  // Vehicles aren't a fixed fleet — SAP doesn't know the vehicle in advance,
+  // so a Truck record is created ad hoc by the Loader when the customer's
+  // vehicle physically arrives to collect an order (see
+  // registerVehicleForSalesOrder). plate/driverName are captured then.
   plate: string;
-  status: 'Waiting' | 'Loading' | 'Dispatched';
+  driverName: string | null;
+  // Generated once, immediately after the Loader confirms the physical
+  // plate match — this is what the Loader scans later to verify the vehicle
+  // before signing the handover (not how the vehicle is discovered).
+  dispatchBarcode: string | null;
+  // 'Staged' once scanDispatchLine has verified and staged its sales
+  // order's goods at its dispatch line — the WMS's workflow ends there
+  // (see DispatchVerification), so there's no further truck status beyond it.
+  status: 'Waiting' | 'Staged';
   salesOrderId: string | null;
   dispatchLine: string;
-  // Printed once per sales-order loading — the operator scans THIS, not the
-  // truck ID, per spec §18 ("temporary dispatch barcode... attached to the vehicle").
-  tempDispatchBarcode: string | null;
 }
 
 export interface SalesOrder {
@@ -109,11 +193,26 @@ export interface SalesOrder {
   sku: string;
   productName: string;
   qty: number;
+  // Cumulative quantity the Loader has released into warehouse execution —
+  // picking/dispatch-planning can never draw on more than this, regardless
+  // of how much of the order is still outstanding. Starts at 0; the Loader
+  // is the mandatory first stop for every order.
+  releasedQty: number;
   dispatchedQty: number;
   status: 'Pending' | 'Picking' | 'Fulfilled';
   createdAt: string;
   assignedTruckId: string | null;
   dispatchedPalletIds: string[];
+}
+
+// One row per Loader release event — the audit trail for "who released what,
+// when," since a large order's release can be spread across several days.
+export interface SalesOrderRelease {
+  id: string;
+  salesOrderId: string;
+  qty: number;
+  releasedByUserId: string;
+  releasedAt: string;
 }
 
 export interface Manifest {
@@ -149,8 +248,8 @@ export interface PickTaskItem {
 
 export interface PickTask {
   id: string;
-  salesOrderId: string;
-  origin: 'Storage' | 'Bay-Topup';
+  salesOrderId: string | null;  // null for staging requests (no specific SO)
+  origin: 'Production' | 'Storage' | 'Bay-Topup' | 'Dispatch';
   items: PickTaskItem[];
   status: 'PendingAcceptance' | 'Accepted' | 'Completed';
   assignedPickerId: string | null;
@@ -213,23 +312,74 @@ export interface DirectDispatchApproval {
   status: 'PendingApproval' | 'Approved' | 'Rejected';
   approvedByUserId: string | null;
   approvedAt: string | null;
+  // Storage: the existing bay-shortfall path (FIFO pick task from storage).
+  // Production: pulls a still-Loaded pallet straight off the line, skipping
+  // storage and the bay entirely.
+  source: 'Storage' | 'Production';
 }
 
-export interface DriverConfirmation {
+// A Loader's pre-plan of how much of a sales order's quantity goes onto a
+// given truck — lets one large sales order be split across several trucks
+// instead of the strict one-SO-one-truck relationship elsewhere in the app.
+export interface DispatchAllocation {
   id: string;
-  manifestId: string;
   salesOrderId: string;
   truckId: string;
-  dispatchLine: string;
-  productName: string;
-  totalQty: number;
-  batchNumbers: string[];
-  palletIds: string[];
-  driverName: string;
-  driverSignedAt: string;
-  supervisorUserId: string;
-  supervisorSignedAt: string;
+  plannedQty: number;
+  dispatchedQty: number;
+  dispatchedPalletIds: string[];
+  // Dispatch line assigned by Loader during planning — where the truck will load
+  dispatchLine: string | null;
+  createdByUserId: string;
   createdAt: string;
+  status: 'Planned' | 'Fulfilled';
+}
+
+export interface CustomerReturn {
+  id: string;
+  sku: string;
+  productName: string;
+  qty: number;
+  department: Department;
+  remark: string;
+  photoDataUrl: string | null;
+  reportedByUserId: string;
+  reportedAt: string;
+  // Return lifecycle
+  status: 'Logged' | 'InReturnZone' | 'UnderReview' | 'Approved' | 'Rejected' | 'Actioned';
+  decision: 'Scrap' | 'Restock' | 'Replace' | null;
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+  actionedByUserId: string | null;
+  actionedAt: string | null;
+}
+
+// The final handover printout's backing record. Generated once picking is
+// complete and the Picker has scanned LINE 001 (AwaitingVerification); the
+// Loader then scans the vehicle barcode (VehicleVerified) before the Loader
+// and Driver physically check the goods and both sign (Verified). The WMS's
+// workflow ends here — not "loaded," which happens outside this system.
+// There is no Clerk step in this flow.
+export interface DispatchVerification {
+  id: string;
+  salesOrderId: string;
+  truckId: string;
+  vehicleBarcode: string;
+  dispatchLine: string;
+  customer: string;
+  products: { sku: string; productName: string; orderedQty: number; releasedQty: number; pickedQty: number }[];
+  palletIds: string[];
+  loaderUserId: string | null;
+  pickerUserIds: string[];
+  stagedAt: string;
+  stagedByUserId: string;
+  vehicleVerifiedAt: string | null;
+  vehicleVerifiedByUserId: string | null;
+  driverName: string | null;
+  driverSignedAt: string | null;
+  loaderSignedByUserId: string | null;
+  loaderSignedAt: string | null;
+  status: 'AwaitingVerification' | 'VehicleVerified' | 'Verified';
 }
 
 export interface SapSyncTask {

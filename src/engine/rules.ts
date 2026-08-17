@@ -1,9 +1,34 @@
-import type { Load, Pallet, Rack } from '../types/domain';
+import type { Department, Load, Pallet, Rack, Zone } from '../types/domain';
 
 export function findFreeRackSlot(racks: Rack[]) {
   for (const rack of racks) {
     const slot = rack.slots.find((s) => s.palletId === null);
     if (slot) return { rackId: rack.id, slotIndex: slot.index };
+  }
+  return null;
+}
+
+// Zone-aware rack selection: prefers racks in the zone matching the product's department
+export function findZoneAwareRackSlot(racks: Rack[], zones: Zone[], department: Department | 'Returns') {
+  // Find the zone(s) matching this department
+  const matchingZones = zones.filter((z) => z.department === department);
+
+  // First pass: try racks in matching zones
+  for (const zone of matchingZones) {
+    for (const rack of racks) {
+      if (rack.zoneId === zone.id) {
+        const slot = rack.slots.find((s) => s.palletId === null);
+        if (slot) return { rackId: rack.id, slotIndex: slot.index, zoneId: zone.id, zoneMatch: true };
+      }
+    }
+  }
+
+  // Fallback: any free rack if zone is full
+  for (const rack of racks) {
+    const slot = rack.slots.find((s) => s.palletId === null);
+    if (slot) {
+      return { rackId: rack.id, slotIndex: slot.index, zoneId: rack.zoneId || 'unknown', zoneMatch: false };
+    }
   }
   return null;
 }

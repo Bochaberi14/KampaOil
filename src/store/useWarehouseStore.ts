@@ -2,8 +2,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
   Batch,
+  CustomerReturn,
+  Department,
   DirectDispatchApproval,
-  DriverConfirmation,
+  DispatchAllocation,
+  DispatchVerification,
   HoldRecord,
   Line,
   Load,
@@ -11,16 +14,22 @@ import type {
   Movement,
   Pallet,
   PickTask,
+  PickTaskItem,
   ProductionOrder,
   Rack,
   RecallCase,
   RecallStageName,
   SalesOrder,
+  SalesOrderRelease,
   SapSyncTask,
+  SecurityEvent,
+  Shelf,
   Truck,
   User,
+  Zone,
 } from '../types/domain';
 import {
+  DISPATCH_LINE,
   EXCEPTION_LINE_ID,
   INITIAL_BATCHES,
   INITIAL_BAY_RACKS,
@@ -31,9 +40,13 @@ import {
   INITIAL_RACKS,
   INITIAL_RECALL_CASES,
   INITIAL_TRUCKS,
-  PALLET_CAPACITY,
+  LOADING_BAY_SHELVES,
+  LOADING_BAY_ZONES,
+  STORAGE_SHELVES,
+  STORAGE_ZONES,
   USERS,
 } from '../data/seed';
+import { unitsPerPallet, resolveScannedSku, PRODUCTS } from '../data/products';
 import {
   fetchProductionOrders,
   fetchSalesOrders,
@@ -41,9 +54,11 @@ import {
   postGenericTransaction,
 } from '../mock-sap/sapClient';
 import {
+  generateAllocationId,
   generateApprovalId,
   generateBatchId,
-  generateDriverConfirmationId,
+  generateReturnId,
+  generateReleaseId,
   generateHoldId,
   generateLoadId,
   generateManifestId,
@@ -51,9 +66,11 @@ import {
   generatePickTaskId,
   generateRecallCaseId,
   generateSyncTaskId,
-  generateVehicleLabelId,
+  generateVerificationId,
+  generateTruckId,
+  generateVehicleBarcodeId,
 } from '../engine/ids';
-import { countFreeRackSlots, findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
+import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
 import { can } from '../rbac';
 
 const RECALL_STAGE_ORDER: RecallStageName[] = ['Inspection', 'Repacking', 'Relabelling', 'QA'];
@@ -84,6 +101,51 @@ function reservedPalletIds(pickTasks: PickTask[]): Set<string> {
   return ids;
 }
 
+// Shared by requestPick and assignPickTaskToPickers — FIFO-selects racked,
+// unheld, unreserved stock for a sku up to qty and shapes it into PickTask
+// items. Callers own their own "is there enough?" error messaging; this just
+// does the selection.
+function selectFifoPickItems(
+  state: { pallets: Pallet[]; loads: Load[]; racks: Rack[]; pickTasks: PickTask[] },
+  sku: string,
+  qty: number,
+): PickTaskItem[] {
+  const reserved = reservedPalletIds(state.pickTasks);
+  const rackedPalletIds = new Set(
+    state.pallets.filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id)).map((p) => p.id),
+  );
+  const candidates = state.loads.filter((l) => rackedPalletIds.has(l.palletId));
+  const picked = selectFifoLoads(candidates, sku, qty);
+  return picked.map((l) => {
+    const loc = findRackHoldingPallet(state.racks, l.palletId);
+    return {
+      palletId: l.palletId,
+      sourceRackId: loc?.rackId ?? '',
+      sourceSlotIndex: loc?.slotIndex ?? -1,
+      sku: l.sku,
+      quantity: l.quantity,
+      picked: false,
+    };
+  });
+}
+
+// Find the first available Picker in a department who has no active task.
+// Returns null if no Picker is available (task will stay unassigned, waiting).
+function findAvailablePickerForDepartment(
+  state: { pickTasks: PickTask[]; currentUser: User | null },
+  department: string | undefined,
+): User | null {
+  if (!department) return null;
+  const pickerCandidates = USERS.filter((u) => u.role === 'Picker' && u.department === department);
+  for (const picker of pickerCandidates) {
+    const hasActiveTask = state.pickTasks.some(
+      (t) => t.assignedPickerId === picker.id && t.status === 'Accepted',
+    );
+    if (!hasActiveTask) return picker;
+  }
+  return null;
+}
+
 export type ToastKind = 'success' | 'error' | 'info';
 export interface Toast {
   id: string;
@@ -98,6 +160,24 @@ export type Result<T = undefined> =
 const ok = <T>(data: T): Result<T> => ({ ok: true, data });
 const err = <T>(error: string): Result<T> => ({ ok: false, error });
 
+// Once a Loader has pre-planned allocations for a sales order, a truck is
+// valid for it if it has an allocation row — not by matching the single
+// scalar assignedTruckId/salesOrderId fields. SOs nobody pre-planned keep
+// the original strict one-truck-per-SO behavior unchanged.
+function truckAllowedForOrder(
+  dispatchAllocations: DispatchAllocation[],
+  truck: Truck,
+  so: SalesOrder,
+): boolean {
+  const allocations = dispatchAllocations.filter((a) => a.salesOrderId === so.id);
+  if (allocations.length > 0) {
+    return allocations.some((a) => a.truckId === truck.id);
+  }
+  if (truck.salesOrderId && truck.salesOrderId !== so.id) return false;
+  if (so.assignedTruckId && so.assignedTruckId !== truck.id) return false;
+  return true;
+}
+
 interface WarehouseState {
   currentUser: User | null;
   login: (userId: string) => boolean;
@@ -106,11 +186,21 @@ interface WarehouseState {
   lines: Line[];
   racks: Rack[];
   bayRacks: Rack[];
+  storageZones: Zone[];
+  storageShelves: Shelf[];
+  loadingBayZones: Zone[];
+  loadingBayShelves: Shelf[];
   trucks: Truck[];
   pallets: Pallet[];
 
   productionOrders: ProductionOrder[];
   salesOrders: SalesOrder[];
+  salesOrderReleases: SalesOrderRelease[];
+  releaseSalesOrderQuantity: (args: {
+    salesOrderId: string;
+    qty: number;
+    operatorId: string;
+  }) => Result<{ release: SalesOrderRelease }>;
   sapSyncing: boolean;
   loadSapData: () => Promise<void>;
 
@@ -123,7 +213,8 @@ interface WarehouseState {
   holds: HoldRecord[];
   recallCases: RecallCase[];
   directDispatchApprovals: DirectDispatchApproval[];
-  driverConfirmations: DriverConfirmation[];
+  dispatchVerifications: DispatchVerification[];
+  dispatchAllocations: DispatchAllocation[];
 
   syncQueue: SapSyncTask[];
   simulateSapOutage: boolean;
@@ -131,15 +222,24 @@ interface WarehouseState {
   enqueueSapSync: (type: string, description: string) => void;
   attemptSyncTask: (taskId: string) => void;
 
+  // Security & Auditing
+  securityEvents: SecurityEvent[];
+  logSecurityEvent: (event: SecurityEvent) => void;
+
   toasts: Toast[];
   pushToast: (message: string, kind?: ToastKind) => void;
   dismissToast: (id: string) => void;
 
   // Stage 1 — Production
-  scanLine: (lineId: string) => Result<{ line: Line; productionOrder: ProductionOrder }>;
+  scanLine: (lineId: string) => Result<{ line: Line }>;
+  scanProductForLine: (args: { lineId: string; productCode: string }) => Result<{
+    line: Line;
+    productionOrder: ProductionOrder;
+  }>;
   scanPalletForLoad: (palletId: string) => Result<{ pallet: Pallet }>;
   confirmLoad: (args: {
     lineId: string;
+    productionOrderId: string;
     palletId: string;
     quantity: number;
     operatorId: string;
@@ -154,14 +254,26 @@ interface WarehouseState {
   }) => Result;
 
   // Stage 3 — Loading bay
-  requestPick: (salesOrderId: string) => Result<{ task: PickTask }>;
-  acceptPickTask: (pickTaskId: string, userId: string) => Result<{ task: PickTask }>;
-  declinePickTask: (pickTaskId: string, userId: string) => Result;
+  assignPickTaskToPickers: (args: {
+    salesOrderId: string;
+    assignments: { pickerId: string; qty: number }[];
+    operatorId: string;
+  }) => Result<{ tasks: PickTask[] }>;
+  requestStockFromStorageToLoadingBay: (args: {
+    sku: string;
+    qty: number;
+    operatorId: string;
+  }) => Result<{ task: PickTask | null }>;
   findPickItemByRack: (pickTaskId: string, rackId: string) => Result<{ palletId: string }>;
   scanRackForPick: (args: {
     pickTaskId: string;
     palletId: string;
     rackId: string;
+    operatorId: string;
+  }) => Result;
+  scanPalletLeavingStorage: (args: {
+    pickTaskId: string;
+    palletId: string;
     operatorId: string;
   }) => Result;
   scanBayRackForPick: (args: {
@@ -171,45 +283,82 @@ interface WarehouseState {
     operatorId: string;
   }) => Result<{ completed: boolean }>;
 
+  // Phase 2 — Dispatch picking (bay → dispatch line)
+  assignDispatchPickingTasks: (args: {
+    salesOrderId: string;
+    assignments: { pickerId: string; qty: number }[];
+    operatorId: string;
+  }) => Result<{ tasks: PickTask[] }>;
+  executeDispatchPicking: (args: {
+    pickTaskId: string;
+    bayRackId: string;
+    palletIds: string[];
+    operatorId: string;
+  }) => Result<{ completed: boolean }>;
+
   // Stage 4 — Dispatch
   availableOnBay: (sku: string) => number;
   requestTopUp: (salesOrderId: string) => Result<{ task: PickTask }>;
-  // Prints the temporary dispatch barcode attached to a vehicle (spec §18) —
-  // must happen before that truck can be scanned for dispatch.
-  printVehicleLabel: (
-    truckId: string,
-    salesOrderId: string,
-    operatorId: string,
-  ) => Result<{ barcode: string }>;
-  scanDispatch: (args: {
+  // Loader pre-plans how much of a sales order goes on a given truck — lets
+  // one large order be split across several trucks instead of 1 SO : 1 truck.
+  planDispatchAllocation: (args: {
     salesOrderId: string;
-    bayRackId: string;
-    palletId: string;
-    vehicleBarcode: string;
+    truckId: string;
+    qty: number;
+    dispatchLine: string;
     operatorId: string;
-  }) => Result<{ fulfilled: boolean; manifestId?: string }>;
-
-  // Direct-dispatch shortfall exception — requires HOD/Manager/Director approval
+  }) => Result<{ allocation: DispatchAllocation }>;
+  // Direct-dispatch shortfall exception — requires HOD/Manager/Director approval.
+  // 'Storage' is the original bay-shortfall path; 'Production' pulls a still-
+  // Loaded pallet straight off the line, skipping storage and the bay.
   requestDirectDispatchApproval: (
     salesOrderId: string,
     operatorId: string,
+    source?: 'Storage' | 'Production',
   ) => Result<{ approval: DirectDispatchApproval }>;
-  approveDirectDispatchRequest: (approvalId: string, operatorId: string) => Result<{ task: PickTask }>;
+  approveDirectDispatchRequest: (approvalId: string, operatorId: string) => Result<{ task: PickTask | null }>;
   rejectDirectDispatchRequest: (approvalId: string, operatorId: string) => Result;
-  // Loads a pallet released straight to the dispatch area (bypassing the bay)
-  scanDirectDispatch: (args: {
+  // Diverts a still-Loaded (on-the-line) pallet straight to the dispatch area
+  // under an Approved 'Production' direct-dispatch approval.
+  divertLoadedPalletToDirectDispatch: (args: {
     salesOrderId: string;
     palletId: string;
-    vehicleBarcode: string;
     operatorId: string;
-  }) => Result<{ fulfilled: boolean; manifestId?: string }>;
-
-  // Driver confirmation form
-  signDriverConfirmation: (args: {
-    manifestId: string;
+  }) => Result;
+  // Loader-only: the collecting vehicle is captured when it physically
+  // arrives (SAP never provides it) — generates a permanent vehicle
+  // barcode tied to this sales order.
+  registerVehicleForSalesOrder: (args: {
+    salesOrderId: string;
+    plate: string;
     driverName: string;
     operatorId: string;
-  }) => Result<{ confirmation: DriverConfirmation }>;
+  }) => Result<{ truck: Truck }>;
+  // Picking-complete verification — the Picker scans LINE 001 once every
+  // assigned task is Completed, staging every ready pallet and generating
+  // the DispatchVerification handover printout (AwaitingVerification).
+  generateManifestForPickingComplete: (args: {
+    salesOrderId: string;
+    operatorId: string;
+  }) => Result<{ verification: DispatchVerification }>;
+  scanDispatchLine: (args: {
+    salesOrderId: string;
+    dispatchLineCode: string;
+    operatorId: string;
+  }) => Result<{ verification: DispatchVerification }>;
+  // Loader scans the vehicle's own barcode to verify it (VehicleVerified).
+  verifyDispatchVehicle: (args: {
+    verificationId: string;
+    vehicleBarcode: string;
+    operatorId: string;
+  }) => Result<{ verification: DispatchVerification }>;
+  // Loader + driver sign-off on the handover printout — the WMS's workflow
+  // ends here. No separate Clerk step.
+  signDispatchVerification: (args: {
+    verificationId: string;
+    driverName: string;
+    operatorId: string;
+  }) => Result<{ verification: DispatchVerification }>;
 
   // Stage 5 — Hold & Investigation
   placeHold: (args: {
@@ -260,6 +409,28 @@ interface WarehouseState {
     operatorId: string;
   }) => Result<{ recallCase: RecallCase }>;
 
+  // Customer returns — logged by the Customer Return Clerk, independent of
+  // the pallet/rack model (reverse logistics, not warehouse stock).
+  customerReturns: CustomerReturn[];
+  logCustomerReturn: (args: {
+    sku: string;
+    productName: string;
+    qty: number;
+    department: Department;
+    remark: string;
+    photoDataUrl: string | null;
+    operatorId: string;
+  }) => Result<{ customerReturn: CustomerReturn }>;
+  reviewAndDecideReturn: (args: {
+    returnId: string;
+    decision: 'Scrap' | 'Restock' | 'Replace';
+    operatorId: string;
+  }) => Result<{ customerReturn: CustomerReturn }>;
+  actionReturnDecision: (args: {
+    returnId: string;
+    operatorId: string;
+  }) => Result<{ customerReturn: CustomerReturn }>;
+
   resetDemo: () => void;
 }
 
@@ -267,10 +438,15 @@ const seedState = () => ({
   lines: INITIAL_LINES,
   racks: INITIAL_RACKS,
   bayRacks: INITIAL_BAY_RACKS,
+  storageZones: STORAGE_ZONES,
+  storageShelves: STORAGE_SHELVES,
+  loadingBayZones: LOADING_BAY_ZONES,
+  loadingBayShelves: LOADING_BAY_SHELVES,
   trucks: INITIAL_TRUCKS,
   pallets: INITIAL_PALLETS,
   productionOrders: [] as ProductionOrder[],
   salesOrders: [] as SalesOrder[],
+  salesOrderReleases: [] as SalesOrderRelease[],
   sapSyncing: false,
   loads: INITIAL_LOADS,
   batches: INITIAL_BATCHES,
@@ -280,9 +456,12 @@ const seedState = () => ({
   holds: INITIAL_HOLDS,
   recallCases: INITIAL_RECALL_CASES,
   directDispatchApprovals: [] as DirectDispatchApproval[],
-  driverConfirmations: [] as DriverConfirmation[],
+  dispatchVerifications: [] as DispatchVerification[],
+  dispatchAllocations: [] as DispatchAllocation[],
+  customerReturns: [] as CustomerReturn[],
   syncQueue: [] as SapSyncTask[],
   simulateSapOutage: false,
+  securityEvents: [] as SecurityEvent[],
 });
 
 export const useWarehouseStore = create<WarehouseState>()(
@@ -291,8 +470,55 @@ export const useWarehouseStore = create<WarehouseState>()(
       currentUser: null,
       login: (userId) => {
         const user = USERS.find((u) => u.id === userId);
-        if (!user) return false;
-        set({ currentUser: user });
+        if (!user) {
+          // Log failed login
+          const state = get();
+          const event: SecurityEvent = {
+            id: `SEC-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'LOGIN_FAILED',
+            severity: 'medium',
+            details: `Login attempt for unknown user: ${userId}`,
+            timestamp: new Date().toISOString(),
+          };
+          state.logSecurityEvent(event);
+          return false;
+        }
+
+        // Check if account is locked
+        if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
+          const remainingMinutes = Math.ceil(
+            (new Date(user.lockedUntil).getTime() - Date.now()) / 60000
+          );
+          const state = get();
+          const event: SecurityEvent = {
+            id: `SEC-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'ACCOUNT_LOCKED',
+            severity: 'high',
+            details: `Account locked. Try again in ${remainingMinutes} minutes.`,
+            userId: user.id,
+            userName: user.name,
+            timestamp: new Date().toISOString(),
+          };
+          state.logSecurityEvent(event);
+          return false;
+        }
+
+        // Successful login
+        set((state) => {
+          const event: SecurityEvent = {
+            id: `SEC-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'LOGIN_SUCCESS',
+            severity: 'low',
+            details: `${user.name} logged in successfully`,
+            userId: user.id,
+            userName: user.name,
+            timestamp: new Date().toISOString(),
+          };
+          return {
+            currentUser: user,
+            securityEvents: [...state.securityEvents, event].slice(-100),
+          };
+        });
         return true;
       },
       logout: () => set({ currentUser: null }),
@@ -322,6 +548,9 @@ export const useWarehouseStore = create<WarehouseState>()(
       },
       dismissToast: (id) =>
         set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
+
+      logSecurityEvent: (event) =>
+        set((state) => ({ securityEvents: [...state.securityEvents, event].slice(-100) })),
 
       setSimulateSapOutage: (value) => {
         set({ simulateSapOutage: value });
@@ -389,21 +618,34 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const line = state.lines.find((l) => l.id === lineId);
         if (!line) return err(`Line "${lineId}" not found`);
+        return ok({ line });
+      },
 
-        let po: ProductionOrder | undefined;
-        if (line.status === 'Running' && line.activeProductionOrderId) {
-          po = state.productionOrders.find((p) => p.id === line.activeProductionOrderId);
-        } else if (line.status === 'Free') {
-          po = state.productionOrders.find(
-            (p) => p.lineId === line.id && p.status === 'Open',
-          );
+      // A line isn't wired to one fixed product — it's whatever the operator
+      // scans next, same as a physical changeover. Resolves the scanned code
+      // (internal SKU or a real product's own EAN-13) against an Open
+      // production order for this line and hands the line over to it.
+      scanProductForLine: ({ lineId, productCode }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
         }
+        const line = state.lines.find((l) => l.id === lineId);
+        if (!line) return err(`Line "${lineId}" not found`);
+
+        const sku = resolveScannedSku(productCode);
+        const po = state.productionOrders.find(
+          (p) => p.lineId === lineId && p.sku === sku && p.status === 'Open',
+        );
         if (!po) {
-          return err(
-            `Line ${lineId} has no product assigned — no open production order for this line`,
-          );
+          return err(`No open production order for "${productCode}" on line ${lineId}`);
         }
-        return ok({ line, productionOrder: po });
+
+        const updatedLine: Line = { ...line, status: 'Running', activeProductionOrderId: po.id };
+        set((state) => ({
+          lines: state.lines.map((l) => (l.id === lineId ? updatedLine : l)),
+        }));
+        return ok({ line: updatedLine, productionOrder: po });
       },
 
       scanPalletForLoad: (palletId) => {
@@ -419,17 +661,31 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ pallet });
       },
 
-      confirmLoad: ({ lineId, palletId, quantity, operatorId }) => {
-        const lineResult = get().scanLine(lineId);
-        if (!lineResult.ok) return err(lineResult.error);
-        const { line, productionOrder: po } = lineResult.data;
+      confirmLoad: ({ lineId, productionOrderId, palletId, quantity, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        const line = state.lines.find((l) => l.id === lineId);
+        if (!line) return err(`Line "${lineId}" not found`);
+
+        // Pinned to the production order the operator was shown when they
+        // started this pallet — NOT re-derived from the line's current
+        // active order, which may have already moved on to a new product by
+        // the time this pallet is confirmed.
+        const po = state.productionOrders.find((p) => p.id === productionOrderId);
+        if (!po) return err(`Production order "${productionOrderId}" not found`);
+        if (po.lineId !== lineId) {
+          return err(`Production order ${productionOrderId} does not belong to line ${lineId}`);
+        }
 
         const palletResult = get().scanPalletForLoad(palletId);
         if (!palletResult.ok) return err(palletResult.error);
 
-        if (quantity !== PALLET_CAPACITY) {
+        const capacity = unitsPerPallet(po.sku);
+        if (quantity !== capacity) {
           return err(
-            `Quantity must equal a full pallet (${PALLET_CAPACITY} units) to confirm the load — got ${quantity}`,
+            `Quantity must equal a full pallet of ${po.productName} (${capacity} units) to confirm the load — got ${quantity}`,
           );
         }
 
@@ -469,6 +725,28 @@ export const useWarehouseStore = create<WarehouseState>()(
         const newFulfilled = po.fulfilledQty + quantity;
         const poComplete = newFulfilled >= po.targetQty;
 
+        const product = PRODUCTS.find((p) => p.sku === po.sku);
+        const availablePicker = findAvailablePickerForDepartment(get(), product?.department);
+        const putAwayTaskId = generatePickTaskId();
+        const putAwayTask: PickTask = {
+          id: putAwayTaskId,
+          salesOrderId: null,
+          origin: 'Production',
+          items: [
+            {
+              palletId,
+              sourceRackId: lineId,
+              sourceSlotIndex: 0,
+              sku: po.sku,
+              quantity: quantity,
+              picked: false,
+            },
+          ],
+          status: availablePicker ? 'Accepted' : 'PendingAcceptance',
+          assignedPickerId: availablePicker?.id ?? null,
+          createdAt: now,
+        };
+
         set((state) => ({
           loads: [...state.loads, load],
           batches: [...state.batches.filter((b) => b.id !== batch.id), batch],
@@ -477,8 +755,12 @@ export const useWarehouseStore = create<WarehouseState>()(
               ? { ...p, fulfilledQty: newFulfilled, status: poComplete ? 'Complete' : 'Open' }
               : p,
           ),
+          // Only touch the line's own running/active-order state if it's
+          // still on the pinned PO — if it already moved on to a newer order
+          // by the time this (now-stale) confirmation lands, that newer
+          // order's own confirmLoad calls own the line's status from here.
           lines: state.lines.map((l) =>
-            l.id === lineId
+            l.id === lineId && l.activeProductionOrderId === po.id
               ? {
                   ...l,
                   status: poComplete ? 'Free' : 'Running',
@@ -489,12 +771,20 @@ export const useWarehouseStore = create<WarehouseState>()(
           pallets: state.pallets.map((p) =>
             p.id === palletId ? { ...p, status: 'Loaded', loadId } : p,
           ),
+          pickTasks: [...state.pickTasks, putAwayTask],
         }));
 
-        get().pushToast(
-          `Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''}`,
-          'success',
-        );
+        if (availablePicker) {
+          get().pushToast(
+            `Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''} · Put-away task assigned to ${availablePicker.name}`,
+            'success',
+          );
+        } else {
+          get().pushToast(
+            `Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''} · Put-away task created (awaiting Picker)`,
+            'info',
+          );
+        }
         get().enqueueSapSync(
           'PalletCreated',
           `Pallet ${palletId} completed on ${line.name} — Batch ${batch.id}, ${quantity} units of ${po.productName}`,
@@ -550,6 +840,15 @@ export const useWarehouseStore = create<WarehouseState>()(
         const slot = rack.slots.find((s) => s.palletId === null);
         if (!slot) return err(`Rack ${rackId} has no free slot`);
 
+        // Check if this pallet is part of a put-away task and mark it as picked
+        const putAwayTask = state.pickTasks.find(
+          (t) => t.origin === 'Production' && t.items.some((i) => i.palletId === palletId && !i.picked),
+        );
+        const updatedItems = putAwayTask
+          ? putAwayTask.items.map((i) => (i.palletId === palletId ? { ...i, picked: true } : i))
+          : undefined;
+        const putAwayCompleted = updatedItems && updatedItems.every((i) => i.picked);
+
         set((state) => ({
           racks: state.racks.map((r) =>
             r.id === rackId
@@ -561,6 +860,13 @@ export const useWarehouseStore = create<WarehouseState>()(
               ? { ...p, status: 'Racked', location: { type: 'Rack', rackId, slotIndex: slot.index } }
               : p,
           ),
+          pickTasks: putAwayTask
+            ? state.pickTasks.map((t) =>
+                t.id === putAwayTask.id
+                  ? { ...t, items: updatedItems!, status: putAwayCompleted ? 'Completed' : t.status }
+                  : t,
+              )
+            : state.pickTasks,
           movements: [
             ...state.movements,
             {
@@ -573,24 +879,39 @@ export const useWarehouseStore = create<WarehouseState>()(
             },
           ],
         }));
-        get().pushToast(`Pallet ${palletId} racked at ${rackId} / slot ${slot.index + 1}`, 'success');
+        if (putAwayTask && putAwayCompleted) {
+          get().pushToast(`Pallet ${palletId} racked at ${rackId} / slot ${slot.index + 1} · Put-away task complete`, 'success');
+        } else {
+          get().pushToast(`Pallet ${palletId} racked at ${rackId} / slot ${slot.index + 1}`, 'success');
+        }
         get().enqueueSapSync('StorageMovement', `Pallet ${palletId} stored at ${rackId}/slot ${slot.index + 1}`);
         return ok(undefined);
       },
 
-      requestPick: (salesOrderId) => {
+      assignPickTaskToPickers: ({ salesOrderId, assignments, operatorId }) => {
+        // Recorded via the RBAC check only — PickTask has no "assigned by"
+        // field (the picker on each task is what matters downstream).
+        void operatorId;
         const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot request a pick — requires Picker`);
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot assign pickers — requires Loader`);
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (assignments.length === 0) return err('Assign at least one picker');
+        const productDept = PRODUCTS.find((p) => p.sku === so.sku)?.department;
+        for (const a of assignments) {
+          if (a.qty <= 0) return err('Each picker\'s quantity must be greater than zero');
+          const picker = USERS.find((u) => u.id === a.pickerId);
+          if (!picker || picker.role !== 'Picker') return err(`"${a.pickerId}" is not a valid Picker`);
+          if (productDept && picker.department !== productDept) {
+            return err(
+              `Picker ${picker.name} is in ${picker.department}, but ${so.productName} is in ${productDept} — cannot cross-assign`,
+            );
+          }
+        }
 
-        // Stock already pulled for this order — requested, in transit, or
-        // sitting on the bay awaiting dispatch — on top of what's already
-        // dispatched. Only the remainder is worth requesting, which is what
-        // makes this callable again and again as more stock becomes
-        // available, instead of only once per sales order.
+        // Same released-not-yet-committed ceiling requestPick enforces.
         const committedQty = state.pickTasks
           .filter((t) => t.salesOrderId === salesOrderId && t.origin === 'Storage')
           .flatMap((t) => t.items)
@@ -598,109 +919,105 @@ export const useWarehouseStore = create<WarehouseState>()(
             const load = state.loads.find((l) => l.palletId === i.palletId);
             return load && load.status === 'InStorage' ? sum + i.quantity : sum;
           }, 0);
-        const remaining = so.qty - so.dispatchedQty - committedQty;
-        if (remaining <= 0) {
+        const availableToAssign = so.releasedQty - so.dispatchedQty - committedQty;
+        const totalRequested = assignments.reduce((sum, a) => sum + a.qty, 0);
+        if (totalRequested > availableToAssign) {
           return err(
-            committedQty > 0
-              ? `Sales order ${salesOrderId} already has enough stock requested or on the bay — dispatch it before requesting more`
-              : 'Sales order already fulfilled',
+            availableToAssign <= 0
+              ? `No released quantity available yet for ${salesOrderId} — ask the Loader to release stock first`
+              : `Only ${availableToAssign.toLocaleString()} released units of ${salesOrderId} are available to assign`,
           );
         }
 
-        const reserved = reservedPalletIds(state.pickTasks);
-        const rackedPalletIds = new Set(
-          state.pallets
-            .filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id))
-            .map((p) => p.id),
-        );
-        const candidates = state.loads.filter((l) => rackedPalletIds.has(l.palletId));
-        const picked = selectFifoLoads(candidates, so.sku, remaining);
-        if (picked.length === 0) {
-          return err(`No stock available in storage for SKU ${so.sku}`);
-        }
-
-        // The bay only has so many slots — pallets already requested but not
-        // yet arrived (still in Storage or in transit) are each already
-        // headed for one, so a new request can't promise more than what's
-        // actually left.
-        const pendingBayArrivals = state.pickTasks
-          .filter((t) => t.origin === 'Storage')
-          .flatMap((t) => t.items)
-          .filter((i) => !i.picked).length;
-        const freeBaySlots = countFreeRackSlots(state.bayRacks);
-        if (freeBaySlots - pendingBayArrivals <= 0) {
-          return err(
-            'Loading bay is full — no free slot available. Dispatch pallets from the bay before requesting more stock.',
-          );
-        }
-
-        const items = picked.map((l) => {
-          const loc = findRackHoldingPallet(state.racks, l.palletId);
-          return {
-            palletId: l.palletId,
-            sourceRackId: loc?.rackId ?? '',
-            sourceSlotIndex: loc?.slotIndex ?? -1,
-            sku: l.sku,
-            quantity: l.quantity,
-            picked: false,
+        const tasks: PickTask[] = [];
+        for (const a of assignments) {
+          // Re-read fresh state each iteration so an earlier assignment in
+          // this same batch is already excluded from the next one's FIFO pool.
+          const liveState = get();
+          const items = selectFifoPickItems(liveState, so.sku, a.qty);
+          if (items.length === 0) {
+            return err(
+              `Ran out of storage stock for SKU ${so.sku} while assigning ${a.pickerId} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
+            );
+          }
+          const task: PickTask = {
+            id: generatePickTaskId(),
+            salesOrderId,
+            origin: 'Storage',
+            items,
+            status: 'Accepted',
+            assignedPickerId: a.pickerId,
+            createdAt: new Date().toISOString(),
           };
-        });
+          tasks.push(task);
+          set((s) => ({ pickTasks: [...s.pickTasks, task] }));
+        }
+        set((s) => ({
+          salesOrders: s.salesOrders.map((so2) => (so2.id === salesOrderId ? { ...so2, status: 'Picking' } : so2)),
+        }));
+        get().pushToast(
+          `Assigned ${tasks.length} picker(s) to ${salesOrderId}: ${assignments
+            .map((a) => `${USERS.find((u) => u.id === a.pickerId)?.name ?? a.pickerId} (${a.qty})`)
+            .join(', ')}`,
+          'success',
+        );
+        return ok({ tasks });
+      },
+
+      requestStockFromStorageToLoadingBay: ({ sku, qty, operatorId }) => {
+        const state = get();
+        // Only HODs from the product's department can request stock
+        if (!can(state.currentUser?.role, 'approve:hold')) {
+          return err(
+            `${state.currentUser?.role ?? 'This role'} cannot request stock staging — requires HOD, Manager, or Director`,
+          );
+        }
+        const product = PRODUCTS.find((p) => p.sku === sku);
+        if (!product) return err(`Product ${sku} not found`);
+        if (
+          state.currentUser?.role === 'HOD' &&
+          state.currentUser.department !== product.department
+        ) {
+          return err(
+            `${sku} is in ${product.department}, but you are HOD of ${state.currentUser.department} — cannot request`,
+          );
+        }
+        if (qty <= 0) return err('Request quantity must be greater than zero');
+
+        // FIFO selection from storage
+        const items = selectFifoPickItems(state, sku, qty);
+        if (items.length === 0) {
+          return err(`No available stock in storage for ${sku}`);
+        }
+
+        // Try to auto-assign to an available Picker in this product's department
+        const availablePicker = findAvailablePickerForDepartment(state, product.department);
+
+        const now = new Date().toISOString();
         const task: PickTask = {
           id: generatePickTaskId(),
-          salesOrderId,
+          salesOrderId: null,  // No specific SO — pure staging request
           origin: 'Storage',
           items,
-          status: 'PendingAcceptance',
-          assignedPickerId: null,
-          createdAt: new Date().toISOString(),
+          status: availablePicker ? 'Accepted' : 'PendingAcceptance',
+          assignedPickerId: availablePicker?.id ?? null,
+          createdAt: now,
         };
         set((state) => ({
           pickTasks: [...state.pickTasks, task],
-          salesOrders: state.salesOrders.map((s) =>
-            s.id === salesOrderId ? { ...s, status: 'Picking' } : s,
-          ),
         }));
-        return ok({ task });
+        const msg = availablePicker
+          ? `Stock request for ${qty} units of ${product.name} assigned to ${availablePicker.name}`
+          : `Stock request for ${qty} units of ${product.name} queued (awaiting available Picker from ${product.department})`;
+        get().pushToast(msg, 'success');
+        get().enqueueSapSync(
+          'StockStagingRequested',
+          `${qty} units of ${sku} staged by ${operatorId}${availablePicker ? ` (assigned to ${availablePicker.name})` : ''}`,
+        );
+        return ok({ task: availablePicker ? task : null });
       },
 
-      acceptPickTask: (pickTaskId, userId) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:pickTask')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot accept pick tasks — requires Picker`);
-        }
-        const task = state.pickTasks.find((t) => t.id === pickTaskId);
-        if (!task) return err(`Pick task "${pickTaskId}" not found`);
-        if (task.status !== 'PendingAcceptance') {
-          return err(`Pick task ${pickTaskId} is not awaiting acceptance (status: ${task.status})`);
-        }
-        const updated: PickTask = { ...task, status: 'Accepted', assignedPickerId: userId };
-        set((state) => ({
-          pickTasks: state.pickTasks.map((t) => (t.id === pickTaskId ? updated : t)),
-        }));
-        get().pushToast(`Pick task ${pickTaskId} accepted — release pallets from storage`, 'success');
-        return ok({ task: updated });
-      },
-
-      declinePickTask: (pickTaskId, userId) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:pickTask')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot decline pick tasks — requires Picker`);
-        }
-        const task = state.pickTasks.find((t) => t.id === pickTaskId);
-        if (!task) return err(`Pick task "${pickTaskId}" not found`);
-        if (task.assignedPickerId !== userId) {
-          return err(`Pick task ${pickTaskId} is not assigned to you`);
-        }
-        set((state) => ({
-          pickTasks: state.pickTasks.map((t) =>
-            t.id === pickTaskId ? { ...t, status: 'PendingAcceptance', assignedPickerId: null } : t,
-          ),
-        }));
-        get().pushToast(`Pick task ${pickTaskId} declined — reassigned to the pending pool`, 'info');
-        return ok(undefined);
-      },
-
-      // Storage-side "step 1" scan (spec §13) — scan the rack first, before the
+      // Storage-side "step 1" scan — scan the rack first, before the
       // pallet is known, and look up which pending item is sourced from it.
       findPickItemByRack: (pickTaskId, rackId) => {
         const task = get().pickTasks.find((t) => t.id === pickTaskId);
@@ -785,6 +1102,47 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok(undefined);
       },
 
+      scanPalletLeavingStorage: ({ pickTaskId, palletId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:pickTask')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot perform picks — requires Picker`);
+        }
+        const task = state.pickTasks.find((t) => t.id === pickTaskId);
+        if (!task) return err(`Pick task "${pickTaskId}" not found`);
+        if (task.assignedPickerId !== operatorId) {
+          return err(`Pick task ${pickTaskId} must be assigned to you`);
+        }
+        const item = task.items.find((i) => i.palletId === palletId);
+        if (!item) return err(`Pallet ${palletId} is not part of this pick task`);
+        const pallet = state.pallets.find((p) => p.id === palletId);
+        if (!pallet) return err(`Pallet ${palletId} not found`);
+        if (pallet.status !== 'Racked') {
+          return err(`Pallet ${palletId} must be in storage (Racked) to be released — current status: ${pallet.status}`);
+        }
+
+        set((state) => ({
+          pallets: state.pallets.map((p) =>
+            p.id === palletId
+              ? { ...p, status: 'InTransitToBay' }
+              : p,
+          ),
+          movements: [
+            ...state.movements,
+            {
+              id: generateMovementId(),
+              palletId,
+              from: `Rack ${item.sourceRackId}`,
+              to: 'InTransit to Bay',
+              timestamp: new Date().toISOString(),
+              operatorId,
+            },
+          ],
+        }));
+        get().pushToast(`Pallet ${palletId} released from storage — en route to bay`, 'success');
+        get().enqueueSapSync('PickMovement', `Pallet ${palletId} released from storage`);
+        return ok(undefined);
+      },
+
       scanBayRackForPick: ({ pickTaskId, palletId, bayRackId, operatorId }) => {
         const state = get();
         if (!can(state.currentUser?.role, 'execute:pickTask')) {
@@ -813,6 +1171,10 @@ export const useWarehouseStore = create<WarehouseState>()(
         const completed = updatedItems.every((i) => i.picked);
 
         set((state) => ({
+          racks: state.racks.map((r) => ({
+            ...r,
+            slots: r.slots.map((s) => (s.palletId === palletId ? { ...s, palletId: null } : s)),
+          })),
           bayRacks: state.bayRacks.map((b) =>
             b.id === bayRackId
               ? { ...b, slots: b.slots.map((s) => (s.index === freeSlot.index ? { ...s, palletId } : s)) }
@@ -845,6 +1207,153 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ completed });
       },
 
+      assignDispatchPickingTasks: ({ salesOrderId, assignments }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot assign pickers — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (assignments.length === 0) return err('Assign at least one picker');
+        const productDept = PRODUCTS.find((p) => p.sku === so.sku)?.department;
+        for (const a of assignments) {
+          if (a.qty <= 0) return err('Each picker\'s quantity must be greater than zero');
+          const picker = USERS.find((u) => u.id === a.pickerId);
+          if (!picker || picker.role !== 'Picker') return err(`"${a.pickerId}" is not a valid Picker`);
+          if (productDept && picker.department !== productDept) {
+            return err(
+              `Picker ${picker.name} is in ${picker.department}, but ${so.productName} is in ${productDept} — cannot cross-assign`,
+            );
+          }
+        }
+
+        const onBayQty = state.bayRacks.reduce((sum, b) => {
+          const palletIds = b.slots.map((s) => s.palletId).filter((id): id is string => !!id);
+          return (
+            sum +
+            palletIds.reduce((slotSum, palletId) => {
+              const load = state.loads.find((l) => l.palletId === palletId);
+              return load && load.sku === so.sku ? slotSum + load.quantity : slotSum;
+            }, 0)
+          );
+        }, 0);
+
+        const totalRequested = assignments.reduce((sum, a) => sum + a.qty, 0);
+        if (totalRequested > onBayQty) {
+          return err(
+            onBayQty <= 0
+              ? `No stock on bay yet for ${salesOrderId} — request stocking first via HOD`
+              : `Only ${onBayQty.toLocaleString()} units on bay; cannot dispatch ${totalRequested.toLocaleString()} units`,
+          );
+        }
+
+        const tasks: PickTask[] = [];
+        for (const a of assignments) {
+          const liveState = get();
+          const items = selectFifoPickItems(liveState, so.sku, a.qty);
+          if (items.length === 0) {
+            return err(
+              `Ran out of bay stock for SKU ${so.sku} while assigning ${a.pickerId} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
+            );
+          }
+          const task: PickTask = {
+            id: generatePickTaskId(),
+            salesOrderId,
+            origin: 'Dispatch',
+            items,
+            status: 'Accepted',
+            assignedPickerId: a.pickerId,
+            createdAt: new Date().toISOString(),
+          };
+          tasks.push(task);
+          set((s) => ({ pickTasks: [...s.pickTasks, task] }));
+        }
+        get().pushToast(
+          `Assigned ${tasks.length} picker(s) for dispatch: ${assignments
+            .map((a) => `${USERS.find((u) => u.id === a.pickerId)?.name ?? a.pickerId} (${a.qty} units)`)
+            .join(', ')}`,
+          'success',
+        );
+        return ok({ tasks });
+      },
+
+      executeDispatchPicking: ({ pickTaskId, bayRackId, palletIds, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:pickTask')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot execute dispatch picking — requires Picker`);
+        }
+        const task = state.pickTasks.find((t) => t.id === pickTaskId);
+        if (!task) return err(`Dispatch task "${pickTaskId}" not found`);
+        if (task.origin !== 'Dispatch') return err(`Task ${pickTaskId} is not a dispatch picking task`);
+        if (task.assignedPickerId !== operatorId) {
+          return err(`Task ${pickTaskId} must be assigned to you`);
+        }
+
+        const so = state.salesOrders.find((s) => s.id === task.salesOrderId);
+        if (!so || !so.assignedTruckId) return err(`Sales order not found or no vehicle assigned`);
+
+        const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
+        if (!truck) return err(`Truck not found`);
+
+        const bayRack = state.bayRacks.find((b) => b.id === bayRackId);
+        if (!bayRack) return err(`Bay rack "${bayRackId}" not found`);
+
+        const taskPalletIds = task.items.map((i) => i.palletId);
+        for (const palletId of palletIds) {
+          if (!taskPalletIds.includes(palletId)) {
+            return err(`Pallet ${palletId} is not part of this dispatch task`);
+          }
+          const pallet = state.pallets.find((p) => p.id === palletId);
+          if (!pallet || pallet.status !== 'OnBay') {
+            return err(`Pallet ${palletId} is not on bay — cannot dispatch`);
+          }
+        }
+
+        const updatedItems = task.items.map((i) =>
+          palletIds.includes(i.palletId) ? { ...i, picked: true } : i,
+        );
+        const completed = updatedItems.every((i) => i.picked);
+
+        set((state) => ({
+          racks: state.racks.map((r) => ({
+            ...r,
+            slots: r.slots.map((s) => (palletIds.includes(s.palletId ?? '') ? { ...s, palletId: null } : s)),
+          })),
+          bayRacks: state.bayRacks.map((b) =>
+            b.id === bayRackId
+              ? { ...b, slots: b.slots.map((s) => (palletIds.includes(s.palletId ?? '') ? { ...s, palletId: null } : s)) }
+              : b,
+          ),
+          pallets: state.pallets.map((p) =>
+            palletIds.includes(p.id)
+              ? { ...p, status: 'StagedForDispatch', location: { type: 'DispatchLine', dispatchLine: truck.dispatchLine, truckId: so.assignedTruckId! } }
+              : p,
+          ),
+          pickTasks: state.pickTasks.map((t) =>
+            t.id === pickTaskId
+              ? { ...t, items: updatedItems, status: completed ? 'Completed' : t.status }
+              : t,
+          ),
+          movements: [
+            ...state.movements,
+            ...palletIds.map((palletId) => ({
+              id: generateMovementId(),
+              palletId,
+              from: `Bay Rack ${bayRackId}`,
+              to: `${truck.dispatchLine}`,
+              timestamp: new Date().toISOString(),
+              operatorId,
+            })),
+          ],
+        }));
+        get().pushToast(
+          `${palletIds.length} pallet(s) staged for dispatch at ${truck.dispatchLine}`,
+          'success',
+        );
+        get().enqueueSapSync('PickMovement', `${palletIds.length} pallets moved to ${truck.dispatchLine}`);
+        return ok({ completed });
+      },
+
       availableOnBay: (sku) => {
         const state = get();
         return state.bayRacks.reduce((sum, b) => {
@@ -863,7 +1372,12 @@ export const useWarehouseStore = create<WarehouseState>()(
         const state = get();
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const remaining = so.qty - so.dispatchedQty;
+        // Capped by released quantity, same principle as requestPick — a
+        // top-up can't pull unreleased stock either.
+        const remaining = so.releasedQty - so.dispatchedQty;
+        if (remaining <= 0) {
+          return err(`No released quantity available yet for ${salesOrderId} — ask the Loader to release stock first`);
+        }
         const available = get().availableOnBay(so.sku);
         const shortfall = remaining - available;
         if (shortfall <= 0) return err('Bay already holds enough stock — no top-up needed');
@@ -908,272 +1422,130 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ task });
       },
 
-      printVehicleLabel: (truckId, salesOrderId, operatorId) => {
+      releaseSalesOrderQuantity: ({ salesOrderId, qty, operatorId }) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot print a vehicle label — requires Picker`);
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot release a sales order — requires Loader`);
         }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        // The collecting vehicle is what triggers release, not the other way
+        // round — SAP doesn't hand it over in advance, so nothing gets pulled
+        // for picking until the customer/driver has actually shown up with a
+        // receipt and the Loader has registered them.
+        if (!so.assignedTruckId) {
+          return err(
+            `Register the collecting vehicle for ${salesOrderId} before releasing it for picking`,
+          );
+        }
+        if (qty <= 0) return err('Release quantity must be greater than zero');
+        const unreleased = so.qty - so.releasedQty;
+        if (qty > unreleased) {
+          return err(`Only ${unreleased.toLocaleString()} units of ${salesOrderId} remain unreleased`);
+        }
+
+        const release: SalesOrderRelease = {
+          id: generateReleaseId(),
+          salesOrderId,
+          qty,
+          releasedByUserId: operatorId,
+          releasedAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          salesOrders: state.salesOrders.map((s) =>
+            s.id === salesOrderId ? { ...s, releasedQty: s.releasedQty + qty } : s,
+          ),
+          salesOrderReleases: [...state.salesOrderReleases, release],
+        }));
+        get().pushToast(
+          `Released ${qty.toLocaleString()} units of ${so.productName} for ${salesOrderId}`,
+          'success',
+        );
+        get().enqueueSapSync(
+          'SalesOrderReleased',
+          `${salesOrderId}: ${qty.toLocaleString()} units released by ${operatorId}`,
+        );
+        return ok({ release });
+      },
+
+      planDispatchAllocation: ({ salesOrderId, truckId, qty, dispatchLine, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot plan a dispatch — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (so.status === 'Fulfilled') return err(`Sales order ${salesOrderId} is already fulfilled`);
         const truck = state.trucks.find((t) => t.id === truckId);
         if (!truck) return err(`Truck "${truckId}" not found`);
+        if (qty <= 0) return err('Planned quantity must be greater than zero');
+
+        const existingAllocations = state.dispatchAllocations.filter((a) => a.salesOrderId === salesOrderId);
+        if (existingAllocations.some((a) => a.truckId === truckId)) {
+          return err(`Truck ${truckId} already has an allocation for ${salesOrderId}`);
+        }
+        // A truck already committed elsewhere (and not via an allocation for
+        // this SO) can't also be planned in here.
         if (truck.salesOrderId && truck.salesOrderId !== salesOrderId) {
           return err(`Truck ${truckId} is already assigned to a different sales order`);
         }
-        if (truck.tempDispatchBarcode) {
-          // Already printed for this same sales order — reuse it rather than
-          // issuing a second label for the same load.
-          return ok({ barcode: truck.tempDispatchBarcode });
-        }
-        const barcode = generateVehicleLabelId();
-        set((state) => ({
-          trucks: state.trucks.map((t) =>
-            t.id === truckId ? { ...t, tempDispatchBarcode: barcode, salesOrderId } : t,
-          ),
-        }));
-        get().pushToast(`Temporary dispatch barcode ${barcode} printed — attach it to ${truckId}`, 'info');
-        get().enqueueSapSync('VehicleLabelPrinted', `Barcode ${barcode} printed for ${truckId} — ${salesOrderId}`);
-        void operatorId;
-        return ok({ barcode });
-      },
-
-      scanDispatch: ({ salesOrderId, bayRackId, palletId, vehicleBarcode, operatorId }) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
-        }
-        const so = state.salesOrders.find((s) => s.id === salesOrderId);
-        if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const bayRack = state.bayRacks.find((b) => b.id === bayRackId);
-        if (!bayRack) return err(`Bay rack "${bayRackId}" not found`);
-        const occupiedSlot = bayRack.slots.find((s) => s.palletId === palletId);
-        if (!occupiedSlot) {
-          return err(`Pallet ${palletId} is not on bay rack ${bayRackId}. Scan rejected.`);
-        }
-        const dispatchPallet = state.pallets.find((p) => p.id === palletId);
-        if (dispatchPallet?.holdId) {
-          return err(`Pallet ${palletId} is on hold — cannot dispatch until the hold is released`);
-        }
-        const truckId = state.trucks.find((t) => t.tempDispatchBarcode === vehicleBarcode)?.id;
-        if (!truckId) {
-          return err(`Vehicle barcode "${vehicleBarcode}" not recognized — print a label for a truck first.`);
-        }
-        const load = state.loads.find((l) => l.palletId === palletId);
-        if (!load) return err('Load record not found for this pallet');
-        if (load.sku !== so.sku) {
+        const plannedSoFar = existingAllocations.reduce((sum, a) => sum + a.plannedQty, 0);
+        // Capped by what's actually been released, not the whole order — a
+        // Loader can only plan vehicles for quantity they've released.
+        const remaining = so.releasedQty - so.dispatchedQty - plannedSoFar;
+        if (qty > remaining) {
           return err(
-            `Product mismatch — pallet ${palletId} is ${load.productName}, sales order requires ${so.productName}. Scan rejected.`,
+            remaining <= 0
+              ? `No released, unplanned quantity left for ${salesOrderId} — release more before planning another vehicle`
+              : `Only ${remaining.toLocaleString()} released units of ${salesOrderId} remain unplanned`,
           );
         }
-        const truck = state.trucks.find((t) => t.id === truckId);
-        if (!truck) return err(`Truck "${truckId}" not found`);
-        if (truck.salesOrderId && truck.salesOrderId !== salesOrderId) {
-          return err(`Truck ${truckId} is already assigned to a different sales order. Scan rejected.`);
-        }
-        if (so.assignedTruckId && so.assignedTruckId !== truckId) {
-          return err(`This sales order is already being loaded onto truck ${so.assignedTruckId}`);
-        }
 
-        const newDispatchedQty = so.dispatchedQty + load.quantity;
-        const fulfilled = newDispatchedQty >= so.qty;
-        const newDispatchedPalletIds = [...so.dispatchedPalletIds, palletId];
-
+        const allocation: DispatchAllocation = {
+          id: generateAllocationId(),
+          salesOrderId,
+          truckId,
+          plannedQty: qty,
+          dispatchedQty: 0,
+          dispatchedPalletIds: [],
+          dispatchLine,
+          createdByUserId: operatorId,
+          createdAt: new Date().toISOString(),
+          status: 'Planned',
+        };
         set((state) => ({
-          bayRacks: state.bayRacks.map((b) =>
-            b.id === bayRackId
-              ? { ...b, slots: b.slots.map((s) => (s.index === occupiedSlot.index ? { ...s, palletId: null } : s)) }
-              : b,
-          ),
-          pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'Empty', loadId: null, location: { type: 'FreePool' } } : p,
-          ),
-          loads: state.loads.map((l) => (l.palletId === palletId ? { ...l, status: 'Dispatched' } : l)),
-          trucks: state.trucks.map((t) =>
-            t.id === truckId
-              ? { ...t, status: fulfilled ? 'Dispatched' : 'Loading', salesOrderId }
-              : t,
-          ),
-          salesOrders: state.salesOrders.map((s) =>
-            s.id === salesOrderId
-              ? {
-                  ...s,
-                  dispatchedQty: newDispatchedQty,
-                  status: fulfilled ? 'Fulfilled' : 'Picking',
-                  assignedTruckId: truckId,
-                  dispatchedPalletIds: newDispatchedPalletIds,
-                }
-              : s,
-          ),
-          movements: [
-            ...state.movements,
-            {
-              id: generateMovementId(),
-              palletId,
-              from: `Bay ${bayRackId}`,
-              to: `Truck ${truckId}`,
-              timestamp: new Date().toISOString(),
-              operatorId,
-            },
-          ],
+          dispatchAllocations: [...state.dispatchAllocations, allocation],
+          trucks: state.trucks.map((t) => (t.id === truckId ? { ...t, salesOrderId } : t)),
         }));
-        get().pushToast(`Pallet ${palletId} dispatched to truck ${truckId}`, 'success');
-
-        if (fulfilled) {
-          const manifestId = generateManifestId();
-          const dispatchedAt = new Date().toISOString();
-          const manifest: Manifest = {
-            id: manifestId,
-            salesOrderId,
-            truckId,
-            customer: so.customer,
-            productName: so.productName,
-            totalQty: newDispatchedQty,
-            palletIds: newDispatchedPalletIds,
-            dispatchedAt,
-            sapStatus: 'Syncing',
-            sapDocNumber: null,
-          };
-          set((state) => ({ manifests: [...state.manifests, manifest] }));
-          postDispatchConfirmation({
-            salesOrderId,
-            truckId,
-            palletIds: newDispatchedPalletIds,
-            qty: newDispatchedQty,
-            dispatchedAt,
-          }).then((res) => {
-            set((state) => ({
-              manifests: state.manifests.map((m) =>
-                m.id === manifestId ? { ...m, sapStatus: 'Synced', sapDocNumber: res.sapDocNumber } : m,
-              ),
-            }));
-            get().pushToast(`Dispatch synced to SAP — ${res.sapDocNumber}`, 'success');
-          });
-          return ok({ fulfilled: true, manifestId });
-        }
-        return ok({ fulfilled: false });
+        get().pushToast(
+          `Planned ${qty.toLocaleString()} units of ${salesOrderId} onto ${truckId}`,
+          'success',
+        );
+        return ok({ allocation });
       },
 
-      // Approved direct-dispatch shortfall (spec §17) — the pallet was
-      // released straight to the dispatch area (see scanRackForPick above),
-      // so this loads it onto a truck without ever touching a bay rack.
-      scanDirectDispatch: ({ salesOrderId, palletId, vehicleBarcode, operatorId }) => {
+      requestDirectDispatchApproval: (salesOrderId, operatorId, source = 'Storage') => {
         const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
-        }
-        const so = state.salesOrders.find((s) => s.id === salesOrderId);
-        if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const pallet = state.pallets.find((p) => p.id === palletId);
-        if (!pallet || pallet.status !== 'InTransitToTruck') {
-          return err(`Pallet ${palletId} is not ready for direct dispatch (status: ${pallet?.status ?? 'unknown'})`);
-        }
-        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot dispatch until the hold is released`);
-        const load = state.loads.find((l) => l.palletId === palletId);
-        if (!load) return err('Load record not found for this pallet');
-        if (load.sku !== so.sku) {
-          return err(
-            `Product mismatch — pallet ${palletId} is ${load.productName}, sales order requires ${so.productName}. Scan rejected.`,
-          );
-        }
-        const truckId = state.trucks.find((t) => t.tempDispatchBarcode === vehicleBarcode)?.id;
-        if (!truckId) {
-          return err(`Vehicle barcode "${vehicleBarcode}" not recognized — print a label for a truck first.`);
-        }
-        const truck = state.trucks.find((t) => t.id === truckId);
-        if (!truck) return err(`Truck "${truckId}" not found`);
-        if (truck.salesOrderId && truck.salesOrderId !== salesOrderId) {
-          return err(`Truck ${truckId} is already assigned to a different sales order. Scan rejected.`);
-        }
-        if (so.assignedTruckId && so.assignedTruckId !== truckId) {
-          return err(`This sales order is already being loaded onto truck ${so.assignedTruckId}`);
-        }
-
-        const newDispatchedQty = so.dispatchedQty + load.quantity;
-        const fulfilled = newDispatchedQty >= so.qty;
-        const newDispatchedPalletIds = [...so.dispatchedPalletIds, palletId];
-
-        set((state) => ({
-          pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'Empty', loadId: null, location: { type: 'FreePool' } } : p,
-          ),
-          loads: state.loads.map((l) => (l.palletId === palletId ? { ...l, status: 'Dispatched' } : l)),
-          trucks: state.trucks.map((t) =>
-            t.id === truckId
-              ? { ...t, status: fulfilled ? 'Dispatched' : 'Loading', salesOrderId }
-              : t,
-          ),
-          salesOrders: state.salesOrders.map((s) =>
-            s.id === salesOrderId
-              ? {
-                  ...s,
-                  dispatchedQty: newDispatchedQty,
-                  status: fulfilled ? 'Fulfilled' : 'Picking',
-                  assignedTruckId: truckId,
-                  dispatchedPalletIds: newDispatchedPalletIds,
-                }
-              : s,
-          ),
-          movements: [
-            ...state.movements,
-            {
-              id: generateMovementId(),
-              palletId,
-              from: 'Dispatch Area (Direct)',
-              to: `Truck ${truckId}`,
-              timestamp: new Date().toISOString(),
-              operatorId,
-            },
-          ],
-        }));
-        get().pushToast(`Pallet ${palletId} dispatched directly from Storage to truck ${truckId} — bypassed the bay`, 'success');
-
-        if (fulfilled) {
-          const manifestId = generateManifestId();
-          const dispatchedAt = new Date().toISOString();
-          const manifest: Manifest = {
-            id: manifestId,
-            salesOrderId,
-            truckId,
-            customer: so.customer,
-            productName: so.productName,
-            totalQty: newDispatchedQty,
-            palletIds: newDispatchedPalletIds,
-            dispatchedAt,
-            sapStatus: 'Syncing',
-            sapDocNumber: null,
-          };
-          set((state) => ({ manifests: [...state.manifests, manifest] }));
-          postDispatchConfirmation({
-            salesOrderId,
-            truckId,
-            palletIds: newDispatchedPalletIds,
-            qty: newDispatchedQty,
-            dispatchedAt,
-          }).then((res) => {
-            set((state) => ({
-              manifests: state.manifests.map((m) =>
-                m.id === manifestId ? { ...m, sapStatus: 'Synced', sapDocNumber: res.sapDocNumber } : m,
-              ),
-            }));
-            get().pushToast(`Dispatch synced to SAP — ${res.sapDocNumber}`, 'success');
-          });
-          return ok({ fulfilled: true, manifestId });
-        }
-        return ok({ fulfilled: false });
-      },
-
-      requestDirectDispatchApproval: (salesOrderId, operatorId) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot request a direct dispatch — requires Picker`);
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot request a direct dispatch — requires Loader`);
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
         const remaining = so.qty - so.dispatchedQty;
-        const available = get().availableOnBay(so.sku);
-        const shortfall = remaining - available;
-        if (shortfall <= 0) return err('Bay already holds enough stock — no direct dispatch needed');
+        if (remaining <= 0) return err(`Sales order ${salesOrderId} is already fulfilled`);
+
+        // The Storage bypass only makes sense when the bay is genuinely
+        // short; the Production bypass is a broader exception (diverting
+        // still-Loaded stock straight off the line) with no bay-stock check.
+        let shortfall = remaining;
+        if (source === 'Storage') {
+          const available = get().availableOnBay(so.sku);
+          shortfall = remaining - available;
+          if (shortfall <= 0) return err('Bay already holds enough stock — no direct dispatch needed');
+        }
 
         const existing = state.directDispatchApprovals.find(
-          (a) => a.salesOrderId === salesOrderId && a.status === 'PendingApproval',
+          (a) => a.salesOrderId === salesOrderId && a.status === 'PendingApproval' && a.source === source,
         );
         if (existing) return ok({ approval: existing });
 
@@ -1186,10 +1558,11 @@ export const useWarehouseStore = create<WarehouseState>()(
           status: 'PendingApproval',
           approvedByUserId: null,
           approvedAt: null,
+          source,
         };
         set((state) => ({ directDispatchApprovals: [...state.directDispatchApprovals, approval] }));
         get().pushToast(
-          `Direct dispatch requested for ${salesOrderId} (shortfall ${shortfall} units) — awaiting HOD/Manager/Director approval`,
+          `Direct dispatch from ${source} requested for ${salesOrderId} (${shortfall} units) — awaiting HOD/Manager/Director approval`,
           'info',
         );
         return ok({ approval });
@@ -1218,6 +1591,14 @@ export const useWarehouseStore = create<WarehouseState>()(
           `Direct dispatch approved for ${approval.salesOrderId} — ${approval.shortfallQty} units`,
         );
 
+        if (approval.source === 'Production') {
+          get().pushToast(
+            `Direct dispatch from Production approved for ${approval.salesOrderId} — a Picker can now divert a Loaded pallet straight to dispatch`,
+            'success',
+          );
+          return ok({ task: null });
+        }
+
         const topUpResult = get().requestTopUp(approval.salesOrderId);
         if (!topUpResult.ok) {
           get().pushToast(topUpResult.error, 'error');
@@ -1228,6 +1609,62 @@ export const useWarehouseStore = create<WarehouseState>()(
           'success',
         );
         return ok({ task: topUpResult.data.task });
+      },
+
+      divertLoadedPalletToDirectDispatch: ({ salesOrderId, palletId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        const approval = state.directDispatchApprovals.find(
+          (a) => a.salesOrderId === salesOrderId && a.status === 'Approved' && a.source === 'Production',
+        );
+        if (!approval) {
+          return err(`No approved Production direct-dispatch for ${salesOrderId} — request approval first`);
+        }
+        const pallet = state.pallets.find((p) => p.id === palletId);
+        if (!pallet || pallet.status !== 'Loaded') {
+          return err(`Pallet ${palletId} is not on the line and Loaded (status: ${pallet?.status ?? 'unknown'})`);
+        }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot divert until the hold is released`);
+        const load = state.loads.find((l) => l.palletId === palletId);
+        if (!load) return err('Load record not found for this pallet');
+        if (load.sku !== so.sku) {
+          return err(
+            `Product mismatch — pallet ${palletId} is ${load.productName}, sales order requires ${so.productName}. Scan rejected.`,
+          );
+        }
+        // Even an approved exception can't move unreleased stock.
+        const releasedRemaining = so.releasedQty - so.dispatchedQty;
+        if (load.quantity > releasedRemaining) {
+          return err(
+            `Only ${releasedRemaining.toLocaleString()} released units remain for ${salesOrderId} — not enough to divert this pallet`,
+          );
+        }
+
+        set((state) => ({
+          pallets: state.pallets.map((p) =>
+            p.id === palletId ? { ...p, status: 'InTransitToTruck', location: { type: 'InTransit' } } : p,
+          ),
+          movements: [
+            ...state.movements,
+            {
+              id: generateMovementId(),
+              palletId,
+              from: `Line ${load.lineId}`,
+              to: 'Dispatch Area (Direct from Production)',
+              timestamp: new Date().toISOString(),
+              operatorId,
+            },
+          ],
+        }));
+        get().pushToast(
+          `Pallet ${palletId} diverted straight from Production — scan it onto a truck below`,
+          'success',
+        );
+        return ok(undefined);
       },
 
       rejectDirectDispatchRequest: (approvalId, operatorId) => {
@@ -1252,54 +1689,378 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok(undefined);
       },
 
-      signDriverConfirmation: ({ manifestId, driverName, operatorId }) => {
+      registerVehicleForSalesOrder: ({ salesOrderId, plate, driverName, operatorId }) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'sign:supervisor')) {
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot register a vehicle — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (so.assignedTruckId) {
+          return err(`Sales order ${salesOrderId} already has a vehicle registered`);
+        }
+        if (!plate.trim()) return err('Vehicle registration is required');
+        if (!driverName.trim()) return err('Driver name is required');
+
+        const dispatchBarcode = generateVehicleBarcodeId();
+        const truck: Truck = {
+          id: generateTruckId(),
+          plate: plate.trim(),
+          driverName: driverName.trim(),
+          dispatchBarcode,
+          status: 'Waiting',
+          salesOrderId,
+          dispatchLine: DISPATCH_LINE,
+        };
+        set((state) => ({
+          trucks: [...state.trucks, truck],
+          salesOrders: state.salesOrders.map((s) =>
+            s.id === salesOrderId ? { ...s, assignedTruckId: truck.id } : s,
+          ),
+        }));
+        get().pushToast(`Vehicle ${truck.plate} registered for ${salesOrderId} — barcode ${dispatchBarcode} generated`, 'success');
+        get().enqueueSapSync(
+          'VehicleRegistered',
+          `${truck.plate} (driver ${truck.driverName}) registered for ${salesOrderId} by ${operatorId}`,
+        );
+        return ok({ truck });
+      },
+
+      generateManifestForPickingComplete: ({ salesOrderId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot generate manifests — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (!so.assignedTruckId) {
+          return err(`No vehicle registered yet for ${salesOrderId} — register the vehicle first`);
+        }
+
+        const relevantTasks = state.pickTasks.filter((t) => t.salesOrderId === salesOrderId);
+        if (relevantTasks.length === 0) {
+          return err(`No picking has been requested for ${salesOrderId}`);
+        }
+        const incomplete = relevantTasks.filter((t) => t.status !== 'Completed');
+        if (incomplete.length > 0) {
           return err(
-            `${state.currentUser?.role ?? 'This role'} cannot sign as loading supervisor — requires Manager, HOD, or Director`,
+            `Picking is not complete for ${salesOrderId} — ${incomplete.length} task(s) still in progress`,
           );
         }
-        const manifest = state.manifests.find((m) => m.id === manifestId);
-        if (!manifest) return err(`Manifest "${manifestId}" not found`);
-        if (state.driverConfirmations.some((c) => c.manifestId === manifestId)) {
-          return err(`Manifest ${manifestId} already has a signed confirmation`);
-        }
-        if (!driverName.trim()) return err('Driver name is required');
-        const truck = state.trucks.find((t) => t.id === manifest.truckId);
-        if (!truck) return err(`Truck "${manifest.truckId}" not found`);
 
-        const batchNumbers = Array.from(
-          new Set(
-            manifest.palletIds
-              .map((palletId) => state.loads.find((l) => l.palletId === palletId)?.batchId)
-              .filter((b): b is string => !!b),
-          ),
+        const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
+        if (!truck) return err(`Truck not found`);
+
+        // Check if verification already exists
+        const existing = state.dispatchVerifications.find((v) => v.salesOrderId === salesOrderId);
+        if (existing) {
+          return ok({ verification: existing });
+        }
+
+        const readyPallets = state.pallets.filter(
+          (p) =>
+            (p.status === 'OnBay' || p.status === 'InTransitToTruck') &&
+            state.loads.find((l) => l.palletId === p.id)?.sku === so.sku,
+        );
+        if (readyPallets.length === 0) {
+          return err(`No goods are ready to stage for ${salesOrderId}`);
+        }
+
+        const palletIds = readyPallets.map((p) => p.id);
+        const pickedQty = readyPallets.reduce((sum, p) => {
+          const load = state.loads.find((l) => l.palletId === p.id);
+          return sum + (load?.quantity ?? 0);
+        }, 0);
+        const pickerUserIds = Array.from(
+          new Set(relevantTasks.map((t) => t.assignedPickerId).filter((id): id is string => !!id)),
+        );
+        const allocation = state.dispatchAllocations.find(
+          (a) => a.salesOrderId === salesOrderId && a.truckId === truck.id,
         );
 
         const now = new Date().toISOString();
-        const confirmation: DriverConfirmation = {
-          id: generateDriverConfirmationId(),
-          manifestId,
-          salesOrderId: manifest.salesOrderId,
-          truckId: manifest.truckId,
+        const verification: DispatchVerification = {
+          id: generateVerificationId(),
+          salesOrderId,
+          truckId: truck.id,
+          vehicleBarcode: truck.dispatchBarcode ?? '',
           dispatchLine: truck.dispatchLine,
-          productName: manifest.productName,
-          totalQty: manifest.totalQty,
-          batchNumbers,
-          palletIds: manifest.palletIds,
+          customer: so.customer,
+          products: [
+            { sku: so.sku, productName: so.productName, orderedQty: so.qty, releasedQty: so.releasedQty, pickedQty },
+          ],
+          palletIds,
+          loaderUserId: allocation?.createdByUserId ?? null,
+          pickerUserIds,
+          stagedAt: now,
+          stagedByUserId: operatorId,
+          vehicleVerifiedAt: null,
+          vehicleVerifiedByUserId: null,
+          driverName: null,
+          driverSignedAt: null,
+          loaderSignedByUserId: null,
+          loaderSignedAt: null,
+          status: 'AwaitingVerification',
+        };
+        set((state) => ({
+          dispatchVerifications: [...state.dispatchVerifications, verification],
+        }));
+        get().pushToast(
+          `Manifest generated for ${salesOrderId} — ${pickedQty.toLocaleString()} units ready to stage`,
+          'success',
+        );
+        return ok({ verification });
+      },
+
+      // Picking-complete verification: the Picker scans LINE 001 once every
+      // assigned pick task is Completed. The vehicle itself is checked only
+      // for "has one been registered yet" here — the Loader verifies its
+      // actual identity afterward via verifyDispatchVehicle. On success,
+      // every ready pallet (OnBay from the normal path, or InTransitToTruck
+      // from a Storage-shortfall/Production-bypass exception) is staged —
+      // never emptied, never "in" the truck — and the handover printout is
+      // generated.
+      scanDispatchLine: ({ salesOrderId, dispatchLineCode, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (!so.assignedTruckId) {
+          return err(`No vehicle registered yet for ${salesOrderId} — ask the Loader to register the collecting vehicle`);
+        }
+        const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
+        if (!truck) return err(`Truck "${so.assignedTruckId}" not found`);
+
+        const relevantTasks = state.pickTasks.filter((t) => t.salesOrderId === salesOrderId);
+        if (relevantTasks.length === 0) {
+          return err(`No picking has been requested yet for ${salesOrderId}`);
+        }
+        const incomplete = relevantTasks.filter((t) => t.status !== 'Completed');
+        if (incomplete.length > 0) {
+          return err(
+            `Picking is not complete for ${salesOrderId} — ${incomplete.length} task(s) still in progress. Finish picking before staging.`,
+          );
+        }
+
+        if (dispatchLineCode !== truck.dispatchLine) {
+          return err(`Wrong dispatch line. Please proceed to ${truck.dispatchLine}.`);
+        }
+        if (!truckAllowedForOrder(state.dispatchAllocations, truck, so)) {
+          return err(`Truck ${truck.id} is already assigned to a different sales order`);
+        }
+
+        // Every pallet ready to stage for this SO's product — whichever path
+        // got it there.
+        const readyPallets = state.pallets.filter(
+          (p) =>
+            (p.status === 'OnBay' || p.status === 'InTransitToTruck') &&
+            state.loads.find((l) => l.palletId === p.id)?.sku === so.sku,
+        );
+        if (readyPallets.length === 0) {
+          return err(`No goods are staged and ready for ${salesOrderId} yet`);
+        }
+
+        const palletIds = readyPallets.map((p) => p.id);
+        const pickedQty = readyPallets.reduce((sum, p) => {
+          const load = state.loads.find((l) => l.palletId === p.id);
+          return sum + (load?.quantity ?? 0);
+        }, 0);
+        const pickerUserIds = Array.from(
+          new Set(relevantTasks.map((t) => t.assignedPickerId).filter((id): id is string => !!id)),
+        );
+        const allocation = state.dispatchAllocations.find(
+          (a) => a.salesOrderId === salesOrderId && a.truckId === truck.id,
+        );
+        const hasAllocations = state.dispatchAllocations.some((a) => a.salesOrderId === salesOrderId);
+
+        const now = new Date().toISOString();
+        const newDispatchedQty = so.dispatchedQty + pickedQty;
+        const soFulfilled = newDispatchedQty >= so.qty;
+        const newDispatchedPalletIds = [...so.dispatchedPalletIds, ...palletIds];
+        const dispatchLineLocation = {
+          type: 'DispatchLine' as const,
+          dispatchLine: truck.dispatchLine,
+          truckId: truck.id,
+        };
+
+        set((state) => ({
+          bayRacks: state.bayRacks.map((b) => ({
+            ...b,
+            slots: b.slots.map((s) => (s.palletId && palletIds.includes(s.palletId) ? { ...s, palletId: null } : s)),
+          })),
+          pallets: state.pallets.map((p) =>
+            palletIds.includes(p.id) ? { ...p, status: 'StagedForDispatch', location: dispatchLineLocation } : p,
+          ),
+          loads: state.loads.map((l) =>
+            palletIds.includes(l.palletId) ? { ...l, status: 'Dispatched' } : l,
+          ),
+          trucks: state.trucks.map((t) => (t.id === truck.id ? { ...t, status: 'Staged', salesOrderId } : t)),
+          salesOrders: state.salesOrders.map((s) =>
+            s.id === salesOrderId
+              ? {
+                  ...s,
+                  dispatchedQty: newDispatchedQty,
+                  status: soFulfilled ? 'Fulfilled' : 'Picking',
+                  assignedTruckId: hasAllocations ? s.assignedTruckId : truck.id,
+                  dispatchedPalletIds: newDispatchedPalletIds,
+                }
+              : s,
+          ),
+          dispatchAllocations: allocation
+            ? state.dispatchAllocations.map((a) =>
+                a.id === allocation.id
+                  ? {
+                      ...a,
+                      dispatchedQty: a.dispatchedQty + pickedQty,
+                      dispatchedPalletIds: [...a.dispatchedPalletIds, ...palletIds],
+                      status: a.dispatchedQty + pickedQty >= a.plannedQty ? 'Fulfilled' : 'Planned',
+                    }
+                  : a,
+              )
+            : state.dispatchAllocations,
+          movements: [
+            ...state.movements,
+            ...palletIds.map((palletId) => ({
+              id: generateMovementId(),
+              palletId,
+              from: 'Loading bay / dispatch area',
+              to: `${truck.dispatchLine} (${truck.plate})`,
+              timestamp: now,
+              operatorId,
+            })),
+          ],
+        }));
+
+        const manifestId = generateManifestId();
+        const manifest: Manifest = {
+          id: manifestId,
+          salesOrderId,
+          truckId: truck.id,
+          customer: so.customer,
+          productName: so.productName,
+          totalQty: pickedQty,
+          palletIds,
+          dispatchedAt: now,
+          sapStatus: 'Syncing',
+          sapDocNumber: null,
+        };
+        const verification: DispatchVerification = {
+          id: generateVerificationId(),
+          salesOrderId,
+          truckId: truck.id,
+          vehicleBarcode: truck.dispatchBarcode ?? '',
+          dispatchLine: truck.dispatchLine,
+          customer: so.customer,
+          products: [
+            { sku: so.sku, productName: so.productName, orderedQty: so.qty, releasedQty: so.releasedQty, pickedQty },
+          ],
+          palletIds,
+          loaderUserId: allocation?.createdByUserId ?? null,
+          pickerUserIds,
+          stagedAt: now,
+          stagedByUserId: operatorId,
+          vehicleVerifiedAt: null,
+          vehicleVerifiedByUserId: null,
+          driverName: null,
+          driverSignedAt: null,
+          loaderSignedByUserId: null,
+          loaderSignedAt: null,
+          status: 'AwaitingVerification',
+        };
+        set((state) => ({
+          manifests: [...state.manifests, manifest],
+          dispatchVerifications: [...state.dispatchVerifications, verification],
+        }));
+        get().pushToast(
+          `${pickedQty.toLocaleString()} units of ${so.productName} staged at ${truck.dispatchLine} — awaiting the Loader's vehicle verification`,
+          'success',
+        );
+        postDispatchConfirmation({
+          salesOrderId,
+          truckId: truck.id,
+          palletIds,
+          qty: pickedQty,
+          dispatchedAt: now,
+        }).then((res) => {
+          set((state) => ({
+            manifests: state.manifests.map((m) =>
+              m.id === manifestId ? { ...m, sapStatus: 'Synced', sapDocNumber: res.sapDocNumber } : m,
+            ),
+          }));
+          get().pushToast(`Staging synced to SAP — ${res.sapDocNumber}`, 'success');
+        });
+        return ok({ verification });
+      },
+
+      // Loader-only: scans the vehicle's own barcode (generated at
+      // registration) to verify it's actually the vehicle associated with
+      // this sales order before anyone signs anything.
+      verifyDispatchVehicle: ({ verificationId, vehicleBarcode, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot verify a vehicle — requires Loader`);
+        }
+        const verification = state.dispatchVerifications.find((v) => v.id === verificationId);
+        if (!verification) return err(`Dispatch verification "${verificationId}" not found`);
+        if (verification.status !== 'AwaitingVerification') {
+          return err(`Dispatch verification ${verificationId} is not awaiting vehicle verification`);
+        }
+        if (vehicleBarcode !== verification.vehicleBarcode) {
+          const truck = state.trucks.find((t) => t.id === verification.truckId);
+          return err(
+            `Wrong vehicle. This sales order is not associated with that barcode — expected the vehicle for ${verification.salesOrderId}${truck ? ` (${truck.plate})` : ''}.`,
+          );
+        }
+
+        const now = new Date().toISOString();
+        const updated: DispatchVerification = {
+          ...verification,
+          vehicleVerifiedAt: now,
+          vehicleVerifiedByUserId: operatorId,
+          status: 'VehicleVerified',
+        };
+        set((state) => ({
+          dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === verificationId ? updated : v)),
+        }));
+        get().pushToast(`Vehicle verified for ${verification.salesOrderId}`, 'success');
+        return ok({ verification: updated });
+      },
+
+      // Loader + Driver both confirm the goods staged at the dispatch line
+      // match the printout — no separate Clerk step. Captured together in
+      // one action since both confirmations happen at the same moment.
+      signDispatchVerification: ({ verificationId, driverName, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'sign:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot sign a dispatch verification — requires Loader`);
+        }
+        const verification = state.dispatchVerifications.find((v) => v.id === verificationId);
+        if (!verification) return err(`Dispatch verification "${verificationId}" not found`);
+        if (verification.status !== 'VehicleVerified') {
+          return err(`Dispatch verification ${verificationId} must have its vehicle verified before signing`);
+        }
+        if (!driverName.trim()) return err('Driver name is required');
+
+        const now = new Date().toISOString();
+        const updated: DispatchVerification = {
+          ...verification,
           driverName: driverName.trim(),
           driverSignedAt: now,
-          supervisorUserId: operatorId,
-          supervisorSignedAt: now,
-          createdAt: now,
+          loaderSignedByUserId: operatorId,
+          loaderSignedAt: now,
+          status: 'Verified',
         };
-        set((state) => ({ driverConfirmations: [...state.driverConfirmations, confirmation] }));
-        get().pushToast(`Dispatch confirmation ${confirmation.id} signed for ${manifest.truckId}`, 'success');
+        set((state) => ({
+          dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === verificationId ? updated : v)),
+        }));
+        get().pushToast(`Dispatch verification ${verificationId} signed — handover complete`, 'success');
         get().enqueueSapSync(
-          'DriverConfirmationSigned',
-          `Dispatch confirmation signed — truck ${manifest.truckId}, driver ${confirmation.driverName}`,
+          'DispatchVerified',
+          `Handover complete — ${verification.salesOrderId}, truck ${verification.truckId}`,
         );
-        return ok({ confirmation });
+        return ok({ verification: updated });
       },
 
       placeHold: ({ targetType, targetId, reason, note, operatorId }) => {
@@ -1521,7 +2282,9 @@ export const useWarehouseStore = create<WarehouseState>()(
                 ? `Line ${location.lineId}`
                 : location.type === 'Truck'
                   ? `Truck ${location.truckId}`
-                  : 'In transit';
+                  : location.type === 'DispatchLine'
+                    ? `Dispatch Line (${location.truckId})`
+                    : 'In transit';
 
         const recallCase: RecallCase = {
           id: generateRecallCaseId(),
@@ -1769,12 +2532,95 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ recallCase: updated });
       },
 
+      logCustomerReturn: ({ sku, productName, qty, department, remark, photoDataUrl, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'report:return')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot log a return — requires Customer Return Clerk`);
+        }
+        if (!sku) return err('Select a product');
+        if (qty <= 0) return err('Quantity must be greater than zero');
+        if (!department) return err('Select the department responsible for this product');
+        if (!remark.trim()) return err('A remark describing the return is required');
+
+        const customerReturn: CustomerReturn = {
+          id: generateReturnId(),
+          sku,
+          productName,
+          qty,
+          department,
+          remark: remark.trim(),
+          photoDataUrl,
+          reportedByUserId: operatorId,
+          reportedAt: new Date().toISOString(),
+          status: 'Logged',
+          decision: null,
+          approvedByUserId: null,
+          approvedAt: null,
+          actionedByUserId: null,
+          actionedAt: null,
+        };
+        set((state) => ({ customerReturns: [...state.customerReturns, customerReturn] }));
+        get().pushToast(`Logged return of ${qty} × ${productName}`, 'success');
+        return ok({ customerReturn });
+      },
+
+      reviewAndDecideReturn: ({ returnId, decision, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'approve:hold')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot review returns — requires Manager, HOD, or Director`);
+        }
+        const customerReturn = state.customerReturns.find((r) => r.id === returnId);
+        if (!customerReturn) return err(`Return "${returnId}" not found`);
+        if (customerReturn.status !== 'Logged' && customerReturn.status !== 'InReturnZone') {
+          return err(`Return ${returnId} has already been reviewed`);
+        }
+
+        const updated: CustomerReturn = {
+          ...customerReturn,
+          status: 'Approved',
+          decision,
+          approvedByUserId: operatorId,
+          approvedAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          customerReturns: state.customerReturns.map((r) => (r.id === returnId ? updated : r)),
+        }));
+        get().pushToast(`Return approved — decision: ${decision}`, 'success');
+        return ok({ customerReturn: updated });
+      },
+
+      actionReturnDecision: ({ returnId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot action returns — requires Picker/Warehouse staff`);
+        }
+        const customerReturn = state.customerReturns.find((r) => r.id === returnId);
+        if (!customerReturn) return err(`Return "${returnId}" not found`);
+        if (customerReturn.status !== 'Approved') {
+          return err(`Return ${returnId} must be approved before actioning`);
+        }
+        if (!customerReturn.decision) return err(`No decision made for return ${returnId}`);
+
+        const updated: CustomerReturn = {
+          ...customerReturn,
+          status: 'Actioned',
+          actionedByUserId: operatorId,
+          actionedAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          customerReturns: state.customerReturns.map((r) => (r.id === returnId ? updated : r)),
+        }));
+        const action = customerReturn.decision === 'Scrap' ? 'discarded' : customerReturn.decision === 'Restock' ? 'restocked' : 'prepared for replacement';
+        get().pushToast(`Return actioned — ${action}`, 'success');
+        return ok({ customerReturn: updated });
+      },
+
       resetDemo: () => {
         set({ currentUser: null, toasts: [], ...seedState() });
       },
     }),
     {
-      name: 'kapaoil-warehouse-demo-v2',
+      name: 'kapaoil-warehouse-demo-v3',
       partialize: (state) => {
         const { toasts: _toasts, sapSyncing: _sapSyncing, ...rest } = state;
         return rest;

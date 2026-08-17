@@ -5,10 +5,11 @@ import { RackGrid } from '../components/RackGrid';
 import { StatusPill } from '../components/StatusPill';
 import { TruckCard } from '../components/EntityCards';
 import { can } from '../rbac';
+import { USERS } from '../data/seed';
 
-type WizardStep = 'bay' | 'pallet' | 'label' | 'truck';
-
-type DirectWizardStep = 'pallet' | 'label' | 'truck';
+function userName(userId: string): string {
+  return USERS.find((u) => u.id === userId)?.name ?? userId;
+}
 
 export function DispatchPage() {
   const salesOrders = useWarehouseStore((s) => s.salesOrders);
@@ -17,162 +18,154 @@ export function DispatchPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
   const loads = useWarehouseStore((s) => s.loads);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
-  const manifests = useWarehouseStore((s) => s.manifests);
-  const driverConfirmations = useWarehouseStore((s) => s.driverConfirmations);
+  const dispatchVerifications = useWarehouseStore((s) => s.dispatchVerifications);
   const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
-  const requestDirectDispatchApproval = useWarehouseStore((s) => s.requestDirectDispatchApproval);
-  const approveDirectDispatchRequest = useWarehouseStore((s) => s.approveDirectDispatchRequest);
-  const rejectDirectDispatchRequest = useWarehouseStore((s) => s.rejectDirectDispatchRequest);
-  const signDriverConfirmation = useWarehouseStore((s) => s.signDriverConfirmation);
-  const printVehicleLabel = useWarehouseStore((s) => s.printVehicleLabel);
-  const scanDispatch = useWarehouseStore((s) => s.scanDispatch);
-  const scanDirectDispatch = useWarehouseStore((s) => s.scanDirectDispatch);
+  const divertLoadedPalletToDirectDispatch = useWarehouseStore((s) => s.divertLoadedPalletToDirectDispatch);
+  const scanDispatchLine = useWarehouseStore((s) => s.scanDispatchLine);
+  const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
   const [selectedSOId, setSelectedSOId] = useState<string | null>(null);
-  const [wizard, setWizard] = useState<{
-    step: WizardStep;
+  const [dispatchPickingState, setDispatchPickingState] = useState<{
+    taskId: string | null;
+    step: 'task-select' | 'bay-rack' | 'pallet';
+    currentPalletIndex: number;
     bayRackId: string | null;
-    palletId: string | null;
-  }>({ step: 'bay', bayRackId: null, palletId: null });
-  const [directWizard, setDirectWizard] = useState<{ step: DirectWizardStep; palletId: string | null }>({
-    step: 'pallet',
-    palletId: null,
+  }>({
+    taskId: null,
+    step: 'task-select',
+    currentPalletIndex: 0,
+    bayRackId: null,
   });
-  const [confirmForms, setConfirmForms] = useState<
-    Record<string, { driverName: string; driverSigned: boolean; supervisorSigned: boolean }>
-  >({});
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
+  const selectedSOVerification = selectedSO
+    ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id)
+    : undefined;
   const remaining = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
   const available = selectedSO ? availableOnBay(selectedSO.sku) : 0;
-  const shortfall = selectedSO ? Math.max(0, remaining - available) : 0;
+  const assignedTruck = selectedSO ? trucks.find((t) => t.id === selectedSO.assignedTruckId) : undefined;
 
-  // Pallets an approved direct-dispatch shortfall already released straight
-  // to the dispatch area (bypassing the bay) — ready to load onto a truck.
+  const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
+  const pickingComplete = soPickTasks.length > 0 && soPickTasks.every((t) => t.status === 'Completed');
+
+  const myDispatchPickingTasks = currentUser
+    ? pickTasks.filter(
+        (t) => t.origin === 'Dispatch' && t.assignedPickerId === currentUser.id && t.status === 'Accepted',
+      )
+    : [];
+  const currentDispatchTask = dispatchPickingState.taskId
+    ? myDispatchPickingTasks.find((t) => t.id === dispatchPickingState.taskId)
+    : null;
+  const currentPalletItem = currentDispatchTask?.items[dispatchPickingState.currentPalletIndex] ?? null;
+
+  // Pallets ready to load straight onto a truck, bypassing the bay — either
+  // an approved Storage shortfall released via a Bay-Topup pick task, or a
+  // Loaded pallet diverted straight from Production. Both land on the same
+  // InTransitToTruck status, so filtering on that (+ matching SKU) covers
+  // either path without needing to know which one a pallet came from.
   const readyForDirectDispatch = selectedSO
-    ? pickTasks
-        .filter((t) => t.origin === 'Bay-Topup' && t.salesOrderId === selectedSO.id)
-        .flatMap((t) => t.items)
-        .map((i) => i.palletId)
-        .filter((palletId) => pallets.find((p) => p.id === palletId)?.status === 'InTransitToTruck')
+    ? pallets
+        .filter((p) => p.status === 'InTransitToTruck')
+        .map((p) => p.id)
+        .filter((palletId) => loads.find((l) => l.palletId === palletId)?.sku === selectedSO.sku)
     : [];
 
-  // Once a label is printed for this sales order's truck, reuse the same
-  // barcode for every remaining pallet instead of printing a new one each time.
-  const labeledTruck = selectedSO
-    ? trucks.find((t) => t.salesOrderId === selectedSO.id && t.tempDispatchBarcode)
+  const approvedProductionApproval = selectedSO
+    ? directDispatchApprovals.find(
+        (a) => a.salesOrderId === selectedSO.id && a.status === 'Approved' && a.source === 'Production',
+      )
     : undefined;
-  const availableTrucks = selectedSO
-    ? trucks.filter((t) => !t.salesOrderId || t.salesOrderId === selectedSO.id)
+  const loadedPalletsForSku = selectedSO
+    ? pallets
+        .filter((p) => p.status === 'Loaded')
+        .map((p) => p.id)
+        .filter((palletId) => loads.find((l) => l.palletId === palletId)?.sku === selectedSO.sku)
     : [];
 
-  function handleScanBay(bayRackId: string) {
+  function handleStartDispatchPicking(taskId: string) {
+    setDispatchPickingState({
+      taskId,
+      step: 'bay-rack',
+      currentPalletIndex: 0,
+      bayRackId: null,
+    });
+  }
+
+  function handleScanBayRack(bayRackId: string) {
+    if (!currentDispatchTask) return;
     const bayRack = bayRacks.find((b) => b.id === bayRackId);
-    if (!bayRack || !bayRack.slots.some((s) => s.palletId !== null)) {
-      pushToast(`Bay rack ${bayRackId} is empty — scan rejected`, 'error');
+    if (!bayRack) {
+      pushToast(`Bay rack ${bayRackId} not found`, 'error');
       return;
     }
-    setWizard({ step: 'pallet', bayRackId, palletId: null });
+    setDispatchPickingState((s) => ({ ...s, bayRackId, step: 'pallet' }));
   }
 
-  function handleScanPallet(palletId: string) {
-    if (!wizard.bayRackId) return;
-    const bayRack = bayRacks.find((b) => b.id === wizard.bayRackId);
-    if (!bayRack?.slots.some((s) => s.palletId === palletId)) {
-      pushToast(`Pallet ${palletId} does not match bay rack ${wizard.bayRackId} — scan rejected`, 'error');
+  function handleScanPalletAtBay(palletId: string) {
+    if (!currentDispatchTask) return;
+    const currentItem = currentDispatchTask.items[dispatchPickingState.currentPalletIndex];
+    if (palletId !== currentItem.palletId) {
+      pushToast(`Wrong pallet — expected ${currentItem.palletId}, scanned ${palletId}`, 'error');
       return;
     }
-    setWizard({ ...wizard, step: labeledTruck ? 'truck' : 'label', palletId });
-  }
 
-  function handlePrintLabel(truckId: string, target: 'normal' | 'direct') {
-    if (!selectedSO || !currentUser) return;
-    const result = printVehicleLabel(truckId, selectedSO.id, currentUser.id);
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-    if (target === 'normal') setWizard((w) => ({ ...w, step: 'truck' }));
-    else setDirectWizard((w) => ({ ...w, step: 'truck' }));
-  }
-
-  function handleScanTruck(vehicleBarcode: string) {
-    if (!wizard.bayRackId || !wizard.palletId || !currentUser || !selectedSO) return;
-    const result = scanDispatch({
-      salesOrderId: selectedSO.id,
-      bayRackId: wizard.bayRackId,
-      palletId: wizard.palletId,
-      vehicleBarcode,
+    if (!currentUser) return;
+    const result = executeDispatchPicking({
+      pickTaskId: currentDispatchTask.id,
+      bayRackId: dispatchPickingState.bayRackId!,
+      palletIds: [currentItem.palletId],
       operatorId: currentUser.id,
     });
     if (!result.ok) {
       pushToast(result.error, 'error');
       return;
     }
-    setWizard({ step: 'bay', bayRackId: null, palletId: null });
-    if (result.data.fulfilled) {
-      pushToast(`Sales order ${selectedSO.id} fully dispatched — manifest generated`, 'success');
+
+    const dispatchLine = assignedTruck?.dispatchLine || 'Dispatch Line';
+    pushToast(`${currentItem.palletId} ✓ staged at ${dispatchLine}`, 'success');
+
+    const nextIndex = dispatchPickingState.currentPalletIndex + 1;
+    if (nextIndex < currentDispatchTask.items.length) {
+      setDispatchPickingState((s) => ({ ...s, currentPalletIndex: nextIndex, step: 'bay-rack', bayRackId: null }));
+      pushToast(`Next: ${currentDispatchTask.items[nextIndex].palletId}`, 'info');
+    } else {
+      pushToast(`All ${currentDispatchTask.items.length} pallets staged ✓`, 'success');
+      setDispatchPickingState({
+        taskId: null,
+        step: 'task-select',
+        currentPalletIndex: 0,
+        bayRackId: null,
+      });
     }
   }
 
-  function handleDirectScanPallet(palletId: string) {
-    if (!readyForDirectDispatch.includes(palletId)) {
-      pushToast(`Pallet ${palletId} is not ready for direct dispatch — scan rejected`, 'error');
-      return;
-    }
-    setDirectWizard({ step: labeledTruck ? 'truck' : 'label', palletId });
+  function handleCancelDispatchPicking() {
+    setDispatchPickingState({
+      taskId: null,
+      step: 'task-select',
+      currentPalletIndex: 0,
+      bayRackId: null,
+    });
   }
 
-  function handleDirectScanTruck(vehicleBarcode: string) {
-    if (!directWizard.palletId || !currentUser || !selectedSO) return;
-    const result = scanDirectDispatch({
+  function handleDivertPallet(palletId: string) {
+    if (!selectedSO || !currentUser) return;
+    const result = divertLoadedPalletToDirectDispatch({
       salesOrderId: selectedSO.id,
-      palletId: directWizard.palletId,
-      vehicleBarcode,
+      palletId,
       operatorId: currentUser.id,
     });
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-    setDirectWizard({ step: 'pallet', palletId: null });
-    if (result.data.fulfilled) {
-      pushToast(`Sales order ${selectedSO.id} fully dispatched — manifest generated`, 'success');
-    }
-  }
-
-  function handleRequestApproval() {
-    if (!selectedSO || !currentUser) return;
-    const result = requestDirectDispatchApproval(selectedSO.id, currentUser.id);
     if (!result.ok) pushToast(result.error, 'error');
   }
 
-  function handleApprove(approvalId: string) {
-    const result = approveDirectDispatchRequest(approvalId, currentUser?.id ?? '');
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-    pushToast(
-      `Pick task ${result.data.task.id} created from Storage — a Picker must accept and release it on the Storage screen before it arrives on the Loading Bay`,
-      'info',
-    );
-  }
-
-  function handleReject(approvalId: string) {
-    const result = rejectDirectDispatchRequest(approvalId, currentUser?.id ?? '');
-    if (!result.ok) pushToast(result.error, 'error');
-  }
-
-  function handleSignConfirmation(manifestId: string) {
-    const form = confirmForms[manifestId];
-    if (!currentUser || !form) return;
-    const result = signDriverConfirmation({
-      manifestId,
-      driverName: form.driverName,
+  function handleScanLine(lineCode: string) {
+    if (!selectedSO || !currentUser) return;
+    const result = scanDispatchLine({
+      salesOrderId: selectedSO.id,
+      dispatchLineCode: lineCode,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
@@ -180,17 +173,99 @@ export function DispatchPage() {
       return;
     }
   }
-
-  const occupiedBayRackIds = bayRacks.filter((b) => b.slots.some((s) => s.palletId !== null)).map((b) => b.id);
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-xl font-bold text-white">Stage 4 · Dispatch</h1>
         <p className="text-sm text-slate-400">
-          Match bay stock to the sales order, scan onto the truck, and sync to SAP.
+          Once picking is complete, scan the dispatch line then the vehicle to stage the goods and
+          generate the handover printout — the pallet stays behind, only the product moves on.
         </p>
       </div>
+
+      {myDispatchPickingTasks.length > 0 && can(currentUser?.role, 'execute:pickTask') && (
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="font-semibold text-slate-200">Dispatch Picking (My Tasks)</h2>
+          <p className="text-xs text-slate-500">Move assigned pallets from bay to dispatch line</p>
+
+          {dispatchPickingState.taskId === null ? (
+            <div className="space-y-2">
+              {myDispatchPickingTasks.map((task) => {
+                const palletCount = task.items.length;
+                const progress = task.items.filter((i) => i.picked).length;
+                return (
+                  <button
+                    key={task.id}
+                    onClick={() => handleStartDispatchPicking(task.id)}
+                    className="w-full rounded-lg border border-slate-800 bg-slate-800/60 px-4 py-3 text-left text-sm hover:bg-slate-800"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-slate-200">{task.id}</div>
+                        <div className="text-xs text-slate-500">{palletCount} pallets to move</div>
+                      </div>
+                      <div className={`text-sm font-semibold ${progress === palletCount ? 'text-emerald-400' : 'text-slate-300'}`}>
+                        {progress}/{palletCount}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-indigo-800 bg-indigo-950/40 px-3 py-2">
+                <p className="text-sm font-semibold text-indigo-300">{currentDispatchTask?.id}</p>
+                <p className="text-xs text-indigo-200">
+                  {dispatchPickingState.currentPalletIndex + 1} of {currentDispatchTask?.items.length}: {currentPalletItem?.palletId}
+                </p>
+              </div>
+
+              {dispatchPickingState.step === 'bay-rack' && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">1. Scan bay rack</span>
+                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">2. Scan pallet</span>
+                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan dispatch line</span>
+                  </div>
+                  <p className="text-sm text-slate-300">Scan the bay rack holding {currentPalletItem?.palletId}</p>
+                  <ScanInput
+                    label="Scan source bay rack"
+                    placeholder="e.g. BAY-A"
+                    onScan={handleScanBayRack}
+                    suggestions={bayRacks.map((b) => b.id)}
+                  />
+                </div>
+              )}
+
+              {dispatchPickingState.step === 'pallet' && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Scan bay rack ✓</span>
+                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">2. Scan pallet</span>
+                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan dispatch line</span>
+                  </div>
+                  <p className="text-sm text-slate-300">Scan pallet {currentPalletItem?.palletId} to confirm it's the right one</p>
+                  <ScanInput
+                    label="Scan pallet barcode"
+                    placeholder="e.g. PLT-001"
+                    onScan={handleScanPalletAtBay}
+                    suggestions={[currentPalletItem?.palletId || '']}
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={handleCancelDispatchPicking}
+                className="w-full rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -198,10 +273,7 @@ export function DispatchPage() {
           {salesOrders.map((so) => (
             <button
               key={so.id}
-              onClick={() => {
-                setSelectedSOId(so.id);
-                setWizard({ step: 'bay', bayRackId: null, palletId: null });
-              }}
+              onClick={() => setSelectedSOId(so.id)}
               disabled={so.status === 'Fulfilled'}
               className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm disabled:opacity-50 ${
                 selectedSOId === so.id ? 'border-indigo-500 bg-indigo-950/40' : 'border-slate-800 hover:bg-slate-800/60'
@@ -222,6 +294,12 @@ export function DispatchPage() {
           {selectedSO && selectedSO.status !== 'Fulfilled' && (
             <div className="mt-4 space-y-2 rounded-xl border border-slate-800 bg-slate-800/60 p-4 text-sm">
               <div className="flex justify-between">
+                <span className="text-slate-400">Assigned vehicle</span>
+                <span className="font-medium text-slate-200">
+                  {assignedTruck ? `${assignedTruck.plate} (${assignedTruck.dispatchLine})` : 'None'}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-400">Remaining to dispatch</span>
                 <span className="font-medium text-slate-200">{remaining.toLocaleString()} units</span>
               </div>
@@ -229,141 +307,87 @@ export function DispatchPage() {
                 <span className="text-slate-400">Available on bay ({selectedSO.sku})</span>
                 <span className="font-medium text-slate-200">{available.toLocaleString()} units</span>
               </div>
-              {shortfall > 0 &&
-                (() => {
-                  const pendingApproval = directDispatchApprovals.find(
-                    (a) => a.salesOrderId === selectedSO.id && a.status === 'PendingApproval',
-                  );
-                  const isApprover = can(currentUser?.role, 'approve:directDispatch');
 
-                  const canRequest = can(currentUser?.role, 'execute:scan');
+              <div className="border-t border-slate-700 pt-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Picking progress</p>
+                {soPickTasks.length === 0 && (
+                  <p className="mt-1 text-xs text-slate-500">No picking requested yet.</p>
+                )}
+                <ul className="mt-1 space-y-1">
+                  {soPickTasks.map((t) => (
+                    <li key={t.id} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300">
+                        {t.assignedPickerId ? userName(t.assignedPickerId) : 'Unassigned'}
+                        <span className="ml-2 text-slate-500">
+                          {t.items.filter((i) => i.picked).length}/{t.items.length} picked
+                        </span>
+                      </span>
+                      <StatusPill status={t.status} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
 
-                  if (!pendingApproval) {
-                    return (
-                      <div className="flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2 text-amber-300">
-                        <span>Bay is short by {shortfall.toLocaleString()} units</span>
-                        {canRequest ? (
-                          <button
-                            onClick={handleRequestApproval}
-                            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500"
-                          >
-                            Request direct-dispatch approval
-                          </button>
-                        ) : (
-                          <span className="text-xs">{currentUser?.role ?? 'This role'} cannot request this — requires Picker</span>
-                        )}
-                      </div>
-                    );
-                  }
+              {selectedSOVerification && (
+                <div className="flex items-center justify-between border-t border-slate-700 pt-2 text-xs">
+                  <span className="text-slate-400">
+                    Handover status — vehicle verification and signing happen on the Loader's Dispatch
+                    Planning page.
+                  </span>
+                  <StatusPill status={selectedSOVerification.status} />
+                </div>
+              )}
 
-                  return (
-                    <div className="space-y-2 rounded-lg bg-amber-500/10 px-3 py-2 text-amber-300">
-                      <div>
-                        Direct dispatch requested — {pendingApproval.shortfallQty.toLocaleString()} extra units
-                        from Storage. Once approved, a Picker must still accept, release (Storage), and confirm
-                        arrival (Loading Bay) before these units are dispatchable.
-                      </div>
-                      {isApprover ? (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleApprove(pendingApproval.id)}
-                            className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-500"
-                          >
-                            Approve ({currentUser?.role})
-                          </button>
-                          <button
-                            onClick={() => handleReject(pendingApproval.id)}
-                            className="rounded-md border border-amber-700 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-900/40"
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      ) : (
-                        <p className="text-xs">Awaiting HOD/Manager/Director approval.</p>
-                      )}
-                    </div>
-                  );
-                })()}
             </div>
           )}
         </div>
 
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="font-semibold text-slate-200">Dispatch wizard</h2>
+          <h2 className="font-semibold text-slate-200">Stage &amp; verify</h2>
           {!selectedSO && <p className="text-sm text-slate-500">Select a sales order to begin.</p>}
-          {selectedSO && !can(currentUser?.role, 'execute:scan') && selectedSO.status !== 'Fulfilled' && (
+          {selectedSO && !can(currentUser?.role, 'execute:scan') && (
             <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
               {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
             </p>
           )}
-          {selectedSO && can(currentUser?.role, 'execute:scan') && selectedSO.status !== 'Fulfilled' && (
+          {selectedSO && can(currentUser?.role, 'execute:scan') && !assignedTruck && (
+            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              No vehicle assigned to this sales order yet.
+            </p>
+          )}
+          {selectedSO && can(currentUser?.role, 'execute:scan') && assignedTruck && !pickingComplete && (
+            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              Picking is not complete yet — every assigned task must reach Completed before you can
+              stage at {assignedTruck.dispatchLine}.
+            </p>
+          )}
+          {selectedSO && can(currentUser?.role, 'execute:scan') && assignedTruck && pickingComplete && (
             <>
-              {wizard.step === 'bay' && (
-                <ScanInput
-                  label="Scan bay rack"
-                  placeholder="e.g. BAY-1"
-                  onScan={handleScanBay}
-                  suggestions={occupiedBayRackIds}
-                />
-              )}
-              {wizard.step === 'pallet' && (
-                <ScanInput
-                  label={`Scan pallet on ${wizard.bayRackId}`}
-                  placeholder="e.g. PLT-005"
-                  onScan={handleScanPallet}
-                  suggestions={
-                    wizard.bayRackId
-                      ? bayRacks
-                          .find((b) => b.id === wizard.bayRackId)
-                          ?.slots.map((s) => s.palletId)
-                          .filter((id): id is string => !!id) ?? []
-                      : []
-                  }
-                />
-              )}
-              {wizard.step === 'label' && (
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-300">
-                    Print a temporary dispatch barcode and attach it to a vehicle before scanning.
-                  </p>
-                  {availableTrucks.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => handlePrintLabel(t.id, 'normal')}
-                      className="flex w-full items-center justify-between rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
-                    >
-                      <span>
-                        {t.id} <span className="text-slate-500">({t.dispatchLine})</span>
-                      </span>
-                      <span className="text-xs font-medium text-indigo-400">Print label</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {wizard.step === 'truck' && (
-                <ScanInput
-                  label="Scan the temporary vehicle barcode"
-                  placeholder="e.g. VEH-ab12cd"
-                  onScan={handleScanTruck}
-                  suggestions={labeledTruck?.tempDispatchBarcode ? [labeledTruck.tempDispatchBarcode] : []}
-                />
-              )}
+              <p className="text-xs text-slate-400">
+                All picking is complete — move the goods to {assignedTruck.dispatchLine} and scan it to
+                finish. The pallet itself stays behind; only the product moves on. The Loader takes
+                over from here (vehicle verification and signing).
+              </p>
+              <ScanInput
+                label="Scan the dispatch line"
+                placeholder="e.g. LINE 001"
+                onScan={handleScanLine}
+                suggestions={[assignedTruck.dispatchLine]}
+              />
             </>
           )}
           {selectedSO?.status === 'Fulfilled' && (
-            <p className="text-sm text-emerald-400">This sales order has been fully dispatched.</p>
+            <p className="text-sm text-emerald-400">This sales order has been fully staged for dispatch.</p>
           )}
         </div>
 
-        {selectedSO && readyForDirectDispatch.length > 0 && (
-          <div className="space-y-4 rounded-2xl border border-violet-800 bg-violet-950/20 p-6 lg:col-span-2">
+        {selectedSO && approvedProductionApproval && (
+          <div className="space-y-3 rounded-2xl border border-violet-800 bg-violet-950/20 p-6 lg:col-span-2">
             <div>
-              <h2 className="font-semibold text-violet-200">
-                Direct dispatch — bypassing the loading bay
-              </h2>
+              <h2 className="font-semibold text-violet-200">Divert a pallet straight from Production</h2>
               <p className="text-xs text-violet-300/80">
-                These pallets came from an approved shortfall and were released straight to the
-                dispatch area — scan pallet, then truck, without a bay rack.
+                Approved — scan a pallet that's still Loaded on the line to send it straight to
+                dispatch, skipping storage and the bay entirely.
               </p>
             </div>
             {!can(currentUser?.role, 'execute:scan') ? (
@@ -371,44 +395,20 @@ export function DispatchPage() {
                 {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
               </p>
             ) : (
-              <>
-                {directWizard.step === 'pallet' && (
-                  <ScanInput
-                    label="Scan pallet ready for direct dispatch"
-                    placeholder="e.g. PLT-005"
-                    onScan={handleDirectScanPallet}
-                    suggestions={readyForDirectDispatch}
-                  />
-                )}
-                {directWizard.step === 'label' && (
-                  <div className="space-y-2">
-                    <p className="text-sm text-violet-100">
-                      Print a temporary dispatch barcode and attach it to a vehicle before scanning.
-                    </p>
-                    {availableTrucks.map((t) => (
-                      <button
-                        key={t.id}
-                        onClick={() => handlePrintLabel(t.id, 'direct')}
-                        className="flex w-full items-center justify-between rounded-lg border border-violet-700 px-3 py-2 text-sm text-violet-100 hover:bg-violet-900/40"
-                      >
-                        <span>
-                          {t.id} <span className="text-violet-400">({t.dispatchLine})</span>
-                        </span>
-                        <span className="text-xs font-medium text-violet-300">Print label</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {directWizard.step === 'truck' && (
-                  <ScanInput
-                    label={`Scan the temporary vehicle barcode for pallet ${directWizard.palletId}`}
-                    placeholder="e.g. VEH-ab12cd"
-                    onScan={handleDirectScanTruck}
-                    suggestions={labeledTruck?.tempDispatchBarcode ? [labeledTruck.tempDispatchBarcode] : []}
-                  />
-                )}
-              </>
+              <ScanInput
+                label={`Scan a Loaded pallet of ${selectedSO.productName}`}
+                placeholder="e.g. PLT-005"
+                onScan={handleDivertPallet}
+                suggestions={loadedPalletsForSku}
+              />
             )}
+          </div>
+        )}
+
+        {selectedSO && readyForDirectDispatch.length > 0 && (
+          <div className="rounded-2xl border border-violet-800 bg-violet-950/20 p-6 text-xs text-violet-300/80 lg:col-span-2">
+            {readyForDirectDispatch.length} pallet(s) released straight to the dispatch area (bypassing
+            the bay) are ready — they're included automatically once you scan the dispatch line above.
           </div>
         )}
       </div>
@@ -419,7 +419,7 @@ export function DispatchPage() {
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {bayRacks.map((b) => (
-            <RackGrid key={b.id} rack={b} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
+            <RackGrid key={b.id} rack={b} loads={loads} />
           ))}
         </div>
       </div>
@@ -433,123 +433,6 @@ export function DispatchPage() {
         </div>
       </div>
 
-      {manifests.length > 0 && (
-        <div>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Dispatch manifests
-          </h2>
-          <div className="space-y-3">
-            {manifests
-              .slice()
-              .reverse()
-              .map((m) => {
-                const truck = trucks.find((t) => t.id === m.truckId);
-                const confirmation = driverConfirmations.find((c) => c.manifestId === m.id);
-                const form = confirmForms[m.id] ?? {
-                  driverName: '',
-                  driverSigned: false,
-                  supervisorSigned: false,
-                };
-                return (
-                  <div key={m.id} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-medium text-slate-100">{m.id}</span> — {m.customer} ·{' '}
-                        {m.productName} · {m.totalQty.toLocaleString()} units · truck {m.truckId}
-                        {truck && <span className="text-slate-500"> ({truck.dispatchLine})</span>} ·{' '}
-                        {m.palletIds.length} pallet(s)
-                      </div>
-                      <StatusPill status={m.sapStatus} />
-                    </div>
-
-                    {!confirmation && (
-                      <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-800/60 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Dispatch confirmation form
-                        </p>
-                        <input
-                          value={form.driverName}
-                          onChange={(e) =>
-                            setConfirmForms((f) => ({ ...f, [m.id]: { ...form, driverName: e.target.value } }))
-                          }
-                          placeholder="Driver name"
-                          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
-                        />
-                        <label className="flex items-center gap-2 text-xs text-slate-300">
-                          <input
-                            type="checkbox"
-                            checked={form.driverSigned}
-                            onChange={(e) =>
-                              setConfirmForms((f) => ({ ...f, [m.id]: { ...form, driverSigned: e.target.checked } }))
-                            }
-                          />
-                          Driver signature confirmed
-                        </label>
-                        <label className="flex items-center gap-2 text-xs text-slate-300">
-                          <input
-                            type="checkbox"
-                            checked={form.supervisorSigned}
-                            onChange={(e) =>
-                              setConfirmForms((f) => ({
-                                ...f,
-                                [m.id]: { ...form, supervisorSigned: e.target.checked },
-                              }))
-                            }
-                          />
-                          Loading supervisor signature confirmed
-                        </label>
-                        {can(currentUser?.role, 'sign:supervisor') ? (
-                          <button
-                            onClick={() => handleSignConfirmation(m.id)}
-                            disabled={!form.driverName.trim() || !form.driverSigned || !form.supervisorSigned}
-                            className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
-                          >
-                            Generate & confirm
-                          </button>
-                        ) : (
-                          <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                            {currentUser?.role ?? 'This role'} cannot sign as loading supervisor — requires
-                            Manager, HOD, or Director.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {confirmation && (
-                      <div className="space-y-1 rounded-lg border border-emerald-800 bg-emerald-950/20 p-3 text-xs">
-                        <p className="mb-1 font-semibold uppercase tracking-wide text-emerald-400">
-                          Dispatch confirmation form — signed
-                        </p>
-                        <Row label="Sales order" value={confirmation.salesOrderId} />
-                        <Row label="Product" value={confirmation.productName} />
-                        <Row label="Quantity" value={`${confirmation.totalQty.toLocaleString()} units`} />
-                        <Row label="Batch numbers" value={confirmation.batchNumbers.join(', ')} />
-                        <Row label="Pallet numbers" value={confirmation.palletIds.join(', ')} />
-                        <Row label="Driver name" value={confirmation.driverName} />
-                        <Row label="Dispatch line" value={confirmation.dispatchLine} />
-                        <Row label="Date & time" value={new Date(confirmation.createdAt).toLocaleString()} />
-                        <Row label="Driver signature" value={`Confirmed ${new Date(confirmation.driverSignedAt).toLocaleTimeString()}`} />
-                        <Row
-                          label="Loading supervisor signature"
-                          value={`Confirmed ${new Date(confirmation.supervisorSignedAt).toLocaleTimeString()}`}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <span className="text-slate-400">{label}</span>
-      <span className="text-right font-medium text-slate-200">{value}</span>
     </div>
   );
 }

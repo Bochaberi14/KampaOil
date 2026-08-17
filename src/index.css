@@ -6,3 +6,29 @@ body {
   background-color: #020617;
   color-scheme: dark;
 }
+
+/* PrintSheet content: hidden on screen, and — on print — the only thing
+   visible, replacing the rest of the (dark) app chrome as plain light-on-
+   white paper. display:none/:block (not just visibility) so the two states
+   don't depend on stylesheet ordering against any Tailwind utility. */
+.print-sheet-content {
+  display: none;
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-sheet-content,
+  .print-sheet-content * {
+    visibility: visible;
+  }
+  .print-sheet-content {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: #fff;
+    color: #000;
+  }
+}

@@ -12,9 +12,13 @@ export const generateManifestId = () => next('MANIFEST');
 export const generateHoldId = () => next('HOLD');
 export const generateRecallCaseId = () => next('RECALL');
 export const generateApprovalId = () => next('APPROVAL');
-export const generateDriverConfirmationId = () => next('DRVCONF');
 export const generateSyncTaskId = () => next('SYNC');
-export const generateVehicleLabelId = () => next('VEH');
+export const generateAllocationId = () => next('ALLOC');
+export const generateReturnId = () => next('RETURN');
+export const generateReleaseId = () => next('RELEASE');
+export const generateVerificationId = () => next('VERIFY');
+export const generateTruckId = () => next('TRK');
+export const generateVehicleBarcodeId = () => next('VEH');
 
 export const generateBatchId = (productionOrderId: string) =>
   `BATCH-${productionOrderId}`;
