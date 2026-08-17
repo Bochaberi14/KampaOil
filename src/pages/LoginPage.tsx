@@ -126,25 +126,56 @@ export function LoginPage() {
 
         {step === 'select' && (
           <>
-            <div className="mt-8 space-y-3">
-              {USERS.filter((u) => u.role !== 'Picker').map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => handleSelectUser(u.id)}
-                  disabled={pending}
-                  className="flex w-full items-center justify-between rounded-xl border border-slate-800 px-4 py-3 text-left hover:border-indigo-500 hover:bg-indigo-950/40 disabled:opacity-50"
-                >
-                  <div>
-                    <div className="font-semibold text-slate-100">{u.name}</div>
-                    <div className="text-xs text-slate-500">
-                      {u.role}
-                      {u.department ? ` · ${u.department}` : ''}
+            {/* Web Users - Require Login */}
+            <div className="mt-8">
+              <h2 className="text-xs font-semibold uppercase text-slate-500">🔐 Web Users (Login Required)</h2>
+              <div className="mt-3 space-y-3">
+                {USERS.filter((u) => u.role !== 'Picker').map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => handleSelectUser(u.id)}
+                    disabled={pending}
+                    className="flex w-full items-center justify-between rounded-xl border border-slate-800 px-4 py-3 text-left hover:border-indigo-500 hover:bg-indigo-950/40 disabled:opacity-50"
+                  >
+                    <div>
+                      <div className="font-semibold text-slate-100">{u.name}</div>
+                      <div className="text-xs text-slate-500">
+                        {u.role}
+                        {u.department ? ` · ${u.department}` : ''}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-600">{ROLE_BLURB[u.role]}</div>
                     </div>
-                    <div className="mt-0.5 text-xs text-slate-600">{ROLE_BLURB[u.role]}</div>
-                  </div>
-                  <span className="text-xs text-slate-600">Sign in →</span>
-                </button>
-              ))}
+                    <span className="text-xs text-slate-600">Sign in →</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Pickers - No Login */}
+            <div className="mt-8">
+              <h2 className="text-xs font-semibold uppercase text-slate-500">📱 Pickers (No Login)</h2>
+              <p className="mt-1 text-xs text-slate-600">Barcode scanner devices — direct warehouse access</p>
+              <div className="mt-3 space-y-3">
+                {USERS.filter((u) => u.role === 'Picker').map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => {
+                      login(u.id);
+                      navigate('/dashboard');
+                    }}
+                    disabled={pending}
+                    className="flex w-full items-center justify-between rounded-xl border border-amber-800 bg-amber-950/20 px-4 py-3 text-left hover:border-amber-500 hover:bg-amber-950/40 disabled:opacity-50"
+                  >
+                    <div>
+                      <div className="font-semibold text-amber-100">{u.name}</div>
+                      <div className="text-xs text-amber-600">
+                        {departmentIcons[u.department || '']} {u.department}
+                      </div>
+                    </div>
+                    <span className="text-xs text-amber-600">Start →</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Demo Mode Button */}
@@ -154,14 +185,6 @@ export function LoginPage() {
             >
               ✨ Demo Mode (Skip Login)
             </button>
-
-            {/* Picker Access Info */}
-            <div className="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 px-4 py-3">
-              <div className="text-xs font-semibold text-amber-300">📱 Picker Access</div>
-              <p className="mt-1 text-xs text-amber-200/80">
-                Pickers use barcode scanner devices (Zebra TC53/TC58) for warehouse operations. No login required.
-              </p>
-            </div>
 
             <p className="mt-6 text-center text-xs text-slate-600">
               Enterprise-grade security with MFA authentication
