@@ -9,7 +9,7 @@ export type Role =
   | 'Customer Return Clerk'
   | 'Sales Manager';
 
-export type Department = 'Oil & Refinery' | 'Edibles' | 'Soap' | 'Other';
+export type Department = 'Edible Oils' | 'Margarine & Shortening' | 'Detergents & Soaps' | 'Specialty Products';
 
 export type ZoneName = 'Edible Oils' | 'Margarine & Shortening' | 'Detergents & Soaps' | 'Specialty Products' | 'Returns';
 

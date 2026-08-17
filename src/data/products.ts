@@ -12,9 +12,9 @@ export interface ProductDef {
 // pallet at different counts, unlike the old flat 100-units-for-everything
 // assumption. Each product belongs to a department for task-routing purposes.
 export const PRODUCTS: ProductDef[] = [
-  { sku: 'RINA1L', name: 'Rina 1L', unitsPerPallet: 100, department: 'Oil & Refinery' },
-  { sku: 'TOSS500G', name: 'Toss 500g', unitsPerPallet: 80, department: 'Soap' },
-  { sku: 'PRESTIGE500G', name: 'Prestige 500g', unitsPerPallet: 150, department: 'Oil & Refinery' },
+  { sku: 'RINA1L', name: 'Rina 1L', unitsPerPallet: 100, department: 'Edible Oils' },
+  { sku: 'TOSS500G', name: 'Toss 500g', unitsPerPallet: 80, department: 'Detergents & Soaps' },
+  { sku: 'PRESTIGE500G', name: 'Prestige 500g', unitsPerPallet: 150, department: 'Margarine & Shortening' },
 ];
 
 export function unitsPerPallet(sku: string): number {

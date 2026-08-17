@@ -16,7 +16,7 @@ import type {
   ZoneName,
 } from '../types/domain';
 
-export const DEPARTMENTS: Department[] = ['Oil & Refinery', 'Edibles', 'Soap', 'Other'];
+export const DEPARTMENTS: Department[] = ['Edible Oils', 'Margarine & Shortening', 'Detergents & Soaps', 'Specialty Products'];
 
 // Units per full pallet — drives the "load confirms only when pallet is full" rule.
 export const PALLET_CAPACITY = 100;
@@ -50,10 +50,10 @@ const createShelf = (id: string, zoneId: string, shelfNum: string, rackIds: stri
 
 // STORAGE ZONES: BIN-A through BIN-D
 export const STORAGE_ZONES: Zone[] = [
-  createZone('BIN-A', 'Edible Oils', 'Storage', 'Oil & Refinery', false),
-  createZone('BIN-B', 'Margarine & Shortening', 'Storage', 'Oil & Refinery', true),
-  createZone('BIN-C', 'Detergents & Soaps', 'Storage', 'Soap', false),
-  createZone('BIN-D', 'Specialty Products', 'Storage', 'Other', false),
+  createZone('BIN-A', 'Edible Oils', 'Storage', 'Edible Oils', false),
+  createZone('BIN-B', 'Margarine & Shortening', 'Storage', 'Margarine & Shortening', true),
+  createZone('BIN-C', 'Detergents & Soaps', 'Storage', 'Detergents & Soaps', false),
+  createZone('BIN-D', 'Specialty Products', 'Storage', 'Specialty Products', false),
 ];
 
 // STORAGE SHELVES: Each zone has 1 shelf (S-01) with 3 racks
@@ -66,10 +66,10 @@ export const STORAGE_SHELVES: Shelf[] = [
 
 // LOADING BAY ZONES: BIN-A through BIN-E (includes Returns)
 export const LOADING_BAY_ZONES: Zone[] = [
-  createZone('BIN-A-BAY', 'Edible Oils', 'LoadingBay', 'Oil & Refinery', false),
-  createZone('BIN-B-BAY', 'Margarine & Shortening', 'LoadingBay', 'Oil & Refinery', true),
-  createZone('BIN-C-BAY', 'Detergents & Soaps', 'LoadingBay', 'Soap', false),
-  createZone('BIN-D-BAY', 'Specialty Products', 'LoadingBay', 'Other', false),
+  createZone('BIN-A-BAY', 'Edible Oils', 'LoadingBay', 'Edible Oils', false),
+  createZone('BIN-B-BAY', 'Margarine & Shortening', 'LoadingBay', 'Margarine & Shortening', true),
+  createZone('BIN-C-BAY', 'Detergents & Soaps', 'LoadingBay', 'Detergents & Soaps', false),
+  createZone('BIN-D-BAY', 'Specialty Products', 'LoadingBay', 'Specialty Products', false),
   createZone('BIN-E-BAY', 'Returns', 'LoadingBay', 'Returns', false),
 ];
 
@@ -83,12 +83,12 @@ export const LOADING_BAY_SHELVES: Shelf[] = [
 ];
 
 export const USERS: User[] = [
-  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Soap', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
   { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Edibles', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod3', name: 'Lucy Wambui', role: 'HOD', department: 'Soap', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod3', name: 'Lucy Wambui', role: 'HOD', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
   { id: 'dir1', name: 'Winnie Bochaberi', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
   { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
   { id: 'load1', name: 'Brian Kiptoo', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },

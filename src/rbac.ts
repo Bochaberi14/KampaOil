@@ -127,11 +127,11 @@ export function canViewReturn(user: User | undefined, customerReturn: CustomerRe
 }
 
 // Check if user can view a specific department's operations
-// HODs only see their own department, other roles see all
+// HODs and Pickers see only their own department, other roles see all
 export function canAccessDepartment(user: User | undefined | null, targetDepartment: string | undefined): boolean {
   if (!user) return false;
-  if (user.role === 'HOD') {
-    // HOD can only access their own department
+  if (user.role === 'HOD' || user.role === 'Picker') {
+    // HOD and Picker can only access their own department
     return user.department === targetDepartment;
   }
   // Director, Manager, and other roles can access all departments

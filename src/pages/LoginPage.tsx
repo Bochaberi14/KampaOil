@@ -164,15 +164,16 @@ export function LoginPage() {
                       navigate('/dashboard');
                     }}
                     disabled={pending}
-                    className="flex w-full items-center justify-between rounded-xl border border-amber-800 bg-amber-950/20 px-4 py-3 text-left hover:border-amber-500 hover:bg-amber-950/40 disabled:opacity-50"
+                    className="flex w-full items-center justify-between rounded-xl border border-slate-800 px-4 py-3 text-left hover:border-indigo-500 hover:bg-indigo-950/40 disabled:opacity-50"
                   >
                     <div>
-                      <div className="font-semibold text-amber-100">{u.name}</div>
-                      <div className="text-xs text-amber-600">
-                        {departmentIcons[u.department || '']} {u.department}
+                      <div className="font-semibold text-slate-100">{u.name}</div>
+                      <div className="text-xs text-slate-500">
+                        {departmentIcons[u.department || '']} {u.department} • Picker
                       </div>
+                      <div className="mt-0.5 text-xs text-slate-600">{ROLE_BLURB['Picker']}</div>
                     </div>
-                    <span className="text-xs text-amber-600">Start →</span>
+                    <span className="text-xs text-slate-600">Start →</span>
                   </button>
                 ))}
               </div>

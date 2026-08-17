@@ -138,7 +138,7 @@ export function StoragePage() {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
             Live inventory by zone
-            {currentUser?.role === 'HOD' && (
+            {(currentUser?.role === 'HOD' || currentUser?.role === 'Picker') && (
               <span className="ml-2 text-xs font-normal text-slate-600">
                 ({currentUser.department})
               </span>
