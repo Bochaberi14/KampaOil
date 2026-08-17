@@ -4,6 +4,7 @@ import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
 import { countFreeRackSlots, countRackedPallets, findFreeRackSlot } from '../engine/rules';
 import { STORAGE_ZONES } from '../data/seed';
+import { canAccessDepartment } from '../rbac';
 
 type WizardStep = 'pallet' | 'rack';
 
@@ -137,13 +138,18 @@ export function StoragePage() {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
             Live inventory by zone
+            {currentUser?.role === 'HOD' && (
+              <span className="ml-2 text-xs font-normal text-slate-600">
+                ({currentUser.department})
+              </span>
+            )}
           </h2>
           <span className="text-xs text-slate-500">
             {countFreeRackSlots(racks)} free slots · {countRackedPallets(racks)} pallets stored
           </span>
         </div>
         <div className="space-y-6">
-          {STORAGE_ZONES.map((zone) => {
+          {STORAGE_ZONES.filter((zone) => canAccessDepartment(currentUser, zone.department as string)).map((zone) => {
             const zoneRacks = racks.filter((r) => r.zoneId === zone.id);
             return (
               <div key={zone.id} className="space-y-2">

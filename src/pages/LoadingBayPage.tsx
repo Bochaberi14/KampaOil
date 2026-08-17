@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
-import { can } from '../rbac';
+import { can, canAccessDepartment } from '../rbac';
 import { PRODUCTS } from '../data/products';
 import { LOADING_BAY_ZONES } from '../data/seed';
 
@@ -311,9 +311,14 @@ export function LoadingBayPage() {
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Loading bay zones
+          {currentUser?.role === 'HOD' && (
+            <span className="ml-2 text-xs font-normal text-slate-600">
+              ({currentUser.department})
+            </span>
+          )}
         </h2>
         <div className="space-y-6">
-          {LOADING_BAY_ZONES.map((zone) => {
+          {LOADING_BAY_ZONES.filter((zone) => zone.id === 'BIN-E-BAY' || canAccessDepartment(currentUser, zone.department as string)).map((zone) => {
             const zoneRacks = bayRacks.filter((r) => r.zoneId === zone.id);
             return (
               <div key={zone.id} className="space-y-2">
