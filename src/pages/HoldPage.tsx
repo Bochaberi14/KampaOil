@@ -4,7 +4,8 @@ import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
 import { RackGrid } from '../components/RackGrid';
 import { stageLabel } from '../engine/rules';
-import { can } from '../rbac';
+import { can, canAccessDepartment } from '../rbac';
+import { PRODUCTS } from '../data/products';
 
 const HOLD_REASONS = [
   'Quality defects',
@@ -138,9 +139,26 @@ export function HoldPage() {
   }
 
   const heldPalletIds = pallets.filter((p) => p.holdId).map((p) => p.id);
-  const pendingHolds = holds.filter((h) => h.status === 'PendingApproval');
-  const activeHolds = holds.filter((h) => h.status === 'Active');
-  const otherHolds = holds.filter((h) => h.status !== 'Active' && h.status !== 'PendingApproval');
+
+  // Filter holds by department if HOD/Picker
+  const canAccessHold = (holdId: string): boolean => {
+    const hold = holds.find((h) => h.id === holdId);
+    if (!hold) return false;
+
+    // Get the pallet and its load to determine department
+    const pallet = pallets.find((p) => hold.targetType === 'Pallet' && p.id === hold.targetId);
+    if (!pallet) return true; // If pallet not found, allow access
+
+    const load = loads.find((l) => l.palletId === pallet.id);
+    if (!load) return true; // If load not found, allow access
+
+    const product = PRODUCTS.find((p) => p.sku === load.sku);
+    return canAccessDepartment(currentUser, product?.department);
+  };
+
+  const pendingHolds = holds.filter((h) => h.status === 'PendingApproval' && canAccessHold(h.id));
+  const activeHolds = holds.filter((h) => h.status === 'Active' && canAccessHold(h.id));
+  const otherHolds = holds.filter((h) => h.status !== 'Active' && h.status !== 'PendingApproval' && canAccessHold(h.id));
   const selectedPallet = palletId ? pallets.find((p) => p.id === palletId) : undefined;
 
   return (
