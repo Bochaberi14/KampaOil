@@ -107,9 +107,9 @@ export const USERS: User[] = [
 export const EXCEPTION_LINE_ID = 'L-EXC';
 
 export const INITIAL_LINES: Line[] = [
-  { id: 'L001', name: 'Line 1', status: 'Free', activeProductionOrderId: null },
-  { id: 'L002', name: 'Line 2', status: 'Free', activeProductionOrderId: null },
-  { id: 'L003', name: 'Line 3', status: 'Free', activeProductionOrderId: null },
+  { id: 'L001', name: 'Line 1', status: 'Running', activeProductionOrderId: 'PO001' },
+  { id: 'L002', name: 'Line 2', status: 'Running', activeProductionOrderId: 'PO002' },
+  { id: 'L003', name: 'Line 3', status: 'Running', activeProductionOrderId: 'PO003' },
   { id: EXCEPTION_LINE_ID, name: 'Exception Line', status: 'Free', activeProductionOrderId: null },
 ];
 
