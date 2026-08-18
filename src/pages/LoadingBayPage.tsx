@@ -207,7 +207,7 @@ export function LoadingBayPage() {
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 placeholder-slate-600"
                 >
                   <option value="">Select product...</option>
-                  {PRODUCTS.map((p) => {
+                  {PRODUCTS.filter((p) => canAccessDepartment(currentUser, p.department)).map((p) => {
                     const availablePallets = storageInv.find((inv) => inv.sku === p.sku)?.count || 0;
                     const availableUnits = availablePallets * p.unitsPerPallet;
                     return (
@@ -318,7 +318,14 @@ export function LoadingBayPage() {
           )}
         </h2>
         <div className="space-y-6">
-          {LOADING_BAY_ZONES.filter((zone) => zone.id === 'BIN-E-BAY' || canAccessDepartment(currentUser, zone.department as string)).map((zone) => {
+          {LOADING_BAY_ZONES.filter((zone) => {
+            // Returns zone always visible; only HODs are filtered by department
+            if (zone.id === 'BIN-E-BAY') return true;
+            if (currentUser?.role === 'HOD') {
+              return canAccessDepartment(currentUser, zone.department as string);
+            }
+            return true; // Pickers and others see everything
+          }).map((zone) => {
             const zoneRacks = bayRacks.filter((r) => r.zoneId === zone.id);
             return (
               <div key={zone.id} className="space-y-2">

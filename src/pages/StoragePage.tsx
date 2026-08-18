@@ -149,7 +149,13 @@ export function StoragePage() {
           </span>
         </div>
         <div className="space-y-6">
-          {STORAGE_ZONES.filter((zone) => canAccessDepartment(currentUser, zone.department as string)).map((zone) => {
+          {STORAGE_ZONES.filter((zone) => {
+            // Only HODs are filtered by department; Pickers and others see everything
+            if (currentUser?.role === 'HOD') {
+              return canAccessDepartment(currentUser, zone.department as string);
+            }
+            return true;
+          }).map((zone) => {
             const zoneRacks = racks.filter((r) => r.zoneId === zone.id);
             return (
               <div key={zone.id} className="space-y-2">

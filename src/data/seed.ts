@@ -85,6 +85,10 @@ export const LOADING_BAY_SHELVES: Shelf[] = [
 export const USERS: User[] = [
   { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
   { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick2', name: 'Moses Kipchoge', role: 'Picker', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick3', name: 'Amara Koech', role: 'Picker', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick4', name: 'Rashid Hassan', role: 'Picker', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick5', name: 'Zainab Omondi', role: 'Picker', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
   { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
