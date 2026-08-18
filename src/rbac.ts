@@ -22,7 +22,8 @@ export type Permission =
   | 'report:discrepancy'
   | 'flag:hold'
   | 'plan:dispatch'
-  | 'report:return';
+  | 'report:return'
+  | 'admin:scanner-config';
 
 const SUPERVISOR_PERMISSIONS: Permission[] = [
   'view:dashboard',
@@ -43,9 +44,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // Director and HOD get everything Manager does, plus returns visibility —
   // Manager is deliberately NOT a returns recipient (only Department HOD,
   // Factory Manager, Sales Manager, and Director are).
-  Director: [...SUPERVISOR_PERMISSIONS, 'view:returns', 'view:security'],
+  Director: [...SUPERVISOR_PERMISSIONS, 'view:returns', 'view:security', 'admin:scanner-config'],
   Manager: SUPERVISOR_PERMISSIONS,
-  HOD: [...SUPERVISOR_PERMISSIONS, 'view:returns'],
+  HOD: [...SUPERVISOR_PERMISSIONS, 'view:returns', 'admin:scanner-config'],
   Picker: [
     'view:dashboard',
     'view:production',

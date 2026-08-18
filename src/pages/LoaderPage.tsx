@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { StatusPill } from '../components/StatusPill';
 import { PrintSheet } from '../components/PrintSheet';
 import { Barcode } from '../components/Barcode';
 import { ScanInput } from '../components/ScanInput';
+import { DispatchManifest } from '../components/DispatchManifest';
+import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
 import { USERS } from '../data/seed';
 import type { SalesOrder } from '../types/domain';
 
@@ -59,6 +61,7 @@ export function LoaderPage() {
   const [driverName, setDriverName] = useState('');
   const [plateConfirmed, setPlateConfirmed] = useState(false);
   const [signForm, setSignForm] = useState({ driverName: '', loaderConfirmed: false, driverConfirmed: false });
+  const [shouldAutoPrint, setShouldAutoPrint] = useState(false);
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
 
@@ -97,9 +100,27 @@ export function LoaderPage() {
   );
 
   const assignedTruck = selectedSO ? trucks.find((t) => t.id === selectedSO.assignedTruckId) : undefined;
+
+  // Get only unoccupied dispatch lines (not already assigned to a truck)
+  const occupiedDispatchLines = new Set(trucks.map((t) => t.dispatchLine));
+  const unoccupiedDispatchLines = ['LINE 001', 'LINE 002', 'LINE 003'].filter(
+    (line) => !occupiedDispatchLines.has(line)
+  );
+
   const soVerification = selectedSO
     ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id)
     : undefined;
+
+  // Auto-print manifest and barcode after vehicle verification
+  useEffect(() => {
+    if (soVerification && soVerification.status === 'VehicleVerified' && shouldAutoPrint) {
+      // Trigger print dialogs
+      setTimeout(() => {
+        window.print();
+      }, 500);
+      setShouldAutoPrint(false);
+    }
+  }, [soVerification, shouldAutoPrint]);
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
   // Mirrors the same "already committed" ceiling assignPickTaskToPickers
@@ -112,7 +133,8 @@ export function LoaderPage() {
       return load && load.status === 'InStorage' ? sum + i.quantity : sum;
     }, 0);
   const remainingToAssign = selectedSO ? selectedSO.releasedQty - selectedSO.dispatchedQty - committedQty : 0;
-  const pickerUsers = USERS.filter((u) => u.role === 'Picker');
+  // Only Oil & Refinery pickers
+  const pickerUsers = USERS.filter((u) => u.role === 'Picker' && u.department === 'Oil & Refinery');
 
   // Only show pickers with no ongoing Accepted tasks
   const availablePickers = pickerUsers.filter((picker) => {
@@ -212,7 +234,12 @@ export function LoaderPage() {
       vehicleBarcode,
       operatorId: currentUser.id,
     });
-    if (!result.ok) pushToast(result.error, 'error');
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+    } else {
+      setShouldAutoPrint(true);
+      pushToast('Vehicle verified. Manifest and barcode will print automatically.', 'success');
+    }
   }
 
   function handleSign() {
@@ -743,13 +770,18 @@ export function LoaderPage() {
                     placeholder={`up to ${remainingToPlan}`}
                     className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
                   />
-                  <input
-                    type="text"
+                  <select
                     value={dispatchLine}
-                    onChange={(e) => setDispatchLine(e.target.value.toUpperCase())}
-                    placeholder="e.g. LINE 001"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
-                  />
+                    onChange={(e) => setDispatchLine(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="">Select unoccupied dispatch line…</option>
+                    {unoccupiedDispatchLines.map((line) => (
+                      <option key={line} value={line}>
+                        {line}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     onClick={handlePlan}
                     disabled={!truckId || !allocQty || !dispatchLine}
@@ -837,6 +869,31 @@ export function LoaderPage() {
                     >
                       Sign &amp; complete handover
                     </button>
+                  </div>
+                )}
+
+                {soVerification.status === 'VehicleVerified' && (
+                  <div className="border-t border-slate-800 pt-3">
+                    <div className="mb-4 rounded-lg bg-amber-900/30 p-3">
+                      <p className="text-xs text-amber-200">
+                        ℹ Manifest and vehicle barcode will print automatically. Check your print queue.
+                      </p>
+                    </div>
+                    {/* Hidden print sheets for automatic printing */}
+                    <div className="hidden print-only">
+                      <DispatchManifest
+                        verification={soVerification}
+                        loaderName={currentUser?.name || 'Unknown Loader'}
+                      />
+                      <div style={{ pageBreakAfter: 'always' }} />
+                      <VehicleBarcodePage
+                        vehicleBarcode={soVerification.vehicleBarcode}
+                        vehiclePlate={assignedTruck?.plate || 'Unknown'}
+                        salesOrderId={soVerification.salesOrderId}
+                        customerName={soVerification.customer}
+                        dispatchLine={soVerification.dispatchLine}
+                      />
+                    </div>
                   </div>
                 )}
 

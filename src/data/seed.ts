@@ -9,6 +9,7 @@ import type {
   Rack,
   RecallCase,
   SalesOrder,
+  Scanner,
   Shelf,
   Truck,
   User,
@@ -16,16 +17,16 @@ import type {
   ZoneName,
 } from '../types/domain';
 
-export const DEPARTMENTS: Department[] = ['Edible Oils', 'Margarine & Shortening', 'Detergents & Soaps', 'Specialty Products'];
+export const DEPARTMENTS: Department[] = ['Oil & Refinery'];
 
 // Units per full pallet — drives the "load confirms only when pallet is full" rule.
 export const PALLET_CAPACITY = 100;
 
-// WAREHOUSE ZONING WITH STANDARD NAMING CONVENTION
-// BIN-{Letter}-{Zone Name}-S-{Shelf#}-R-{Rack#}
-// Storage: BIN-A (Oils), BIN-B (Margarine), BIN-C (Soaps), BIN-D (Specialty)
-// Loading Bay: BIN-A through BIN-D (product zones) + BIN-E (returns)
-// Each zone: up to 3 shelves (S-01, S-02, S-03), each shelf: up to 3 racks
+// WAREHOUSE ZONING FOR OIL & REFINERY DEPARTMENT
+// BIN-{Letter}-{Product}-S-{Shelf#}-R-{Rack#}
+// Storage: BIN-A (Kasuku), BIN-B (Rina), BIN-C (Prestige)
+// Loading Bay: BIN-A, BIN-B, BIN-C (products) + BIN-D (returns)
+// Each bin: 2 shelves, 3 racks per shelf
 
 const createZone = (
   id: string,
@@ -48,51 +49,61 @@ const createShelf = (id: string, zoneId: string, shelfNum: string, rackIds: stri
   rackIds,
 });
 
-// STORAGE ZONES: BIN-A through BIN-D
+// STORAGE ZONES: BIN-A (Kasuku), BIN-B (Rina), BIN-C (Prestige)
 export const STORAGE_ZONES: Zone[] = [
-  createZone('BIN-A', 'Edible Oils', 'Storage', 'Edible Oils', false),
-  createZone('BIN-B', 'Margarine & Shortening', 'Storage', 'Margarine & Shortening', true),
-  createZone('BIN-C', 'Detergents & Soaps', 'Storage', 'Detergents & Soaps', false),
-  createZone('BIN-D', 'Specialty Products', 'Storage', 'Specialty Products', false),
+  createZone('BIN-A', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-B', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-C', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
 ];
 
-// STORAGE SHELVES: Each zone has 1 shelf (S-01) with 3 racks
+// STORAGE SHELVES: Each zone has 2 shelves (S-01, S-02) with 3 racks each
 export const STORAGE_SHELVES: Shelf[] = [
-  createShelf('BIN-A-OILS-S-01', 'BIN-A', '01', ['BIN-A-OILS-S-01-R-01', 'BIN-A-OILS-S-01-R-02', 'BIN-A-OILS-S-01-R-03']),
-  createShelf('BIN-B-MARG-S-01', 'BIN-B', '01', ['BIN-B-MARG-S-01-R-01', 'BIN-B-MARG-S-01-R-02', 'BIN-B-MARG-S-01-R-03']),
-  createShelf('BIN-C-SOAP-S-01', 'BIN-C', '01', ['BIN-C-SOAP-S-01-R-01', 'BIN-C-SOAP-S-01-R-02', 'BIN-C-SOAP-S-01-R-03']),
-  createShelf('BIN-D-SPEC-S-01', 'BIN-D', '01', ['BIN-D-SPEC-S-01-R-01', 'BIN-D-SPEC-S-01-R-02', 'BIN-D-SPEC-S-01-R-03']),
+  // BIN-A (Kasuku) - 2 shelves
+  createShelf('BIN-A-S-01', 'BIN-A', '01', ['BIN-A-S-01-R-01', 'BIN-A-S-01-R-02', 'BIN-A-S-01-R-03']),
+  createShelf('BIN-A-S-02', 'BIN-A', '02', ['BIN-A-S-02-R-01', 'BIN-A-S-02-R-02', 'BIN-A-S-02-R-03']),
+  // BIN-B (Rina) - 2 shelves
+  createShelf('BIN-B-S-01', 'BIN-B', '01', ['BIN-B-S-01-R-01', 'BIN-B-S-01-R-02', 'BIN-B-S-01-R-03']),
+  createShelf('BIN-B-S-02', 'BIN-B', '02', ['BIN-B-S-02-R-01', 'BIN-B-S-02-R-02', 'BIN-B-S-02-R-03']),
+  // BIN-C (Prestige) - 2 shelves
+  createShelf('BIN-C-S-01', 'BIN-C', '01', ['BIN-C-S-01-R-01', 'BIN-C-S-01-R-02', 'BIN-C-S-01-R-03']),
+  createShelf('BIN-C-S-02', 'BIN-C', '02', ['BIN-C-S-02-R-01', 'BIN-C-S-02-R-02', 'BIN-C-S-02-R-03']),
 ];
 
-// LOADING BAY ZONES: BIN-A through BIN-E (includes Returns)
+// LOADING BAY ZONES: BIN-A, BIN-B, BIN-C (products) + BIN-D (returns)
 export const LOADING_BAY_ZONES: Zone[] = [
-  createZone('BIN-A-BAY', 'Edible Oils', 'LoadingBay', 'Edible Oils', false),
-  createZone('BIN-B-BAY', 'Margarine & Shortening', 'LoadingBay', 'Margarine & Shortening', true),
-  createZone('BIN-C-BAY', 'Detergents & Soaps', 'LoadingBay', 'Detergents & Soaps', false),
-  createZone('BIN-D-BAY', 'Specialty Products', 'LoadingBay', 'Specialty Products', false),
-  createZone('BIN-E-BAY', 'Returns', 'LoadingBay', 'Returns', false),
+  createZone('BIN-A-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-B-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-C-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-D-BAY', 'Returns', 'LoadingBay', 'Returns', false),
 ];
 
-// LOADING BAY SHELVES: Each zone has 1 shelf with 3 racks (6-pallet capacity each = 18 per zone)
+// LOADING BAY SHELVES: Each zone has 2 shelves with 3 racks each
 export const LOADING_BAY_SHELVES: Shelf[] = [
-  createShelf('BIN-A-BAY-OILS-S-01', 'BIN-A-BAY', '01', ['BIN-A-BAY-OILS-S-01-R-01', 'BIN-A-BAY-OILS-S-01-R-02', 'BIN-A-BAY-OILS-S-01-R-03']),
-  createShelf('BIN-B-BAY-MARG-S-01', 'BIN-B-BAY', '01', ['BIN-B-BAY-MARG-S-01-R-01', 'BIN-B-BAY-MARG-S-01-R-02', 'BIN-B-BAY-MARG-S-01-R-03']),
-  createShelf('BIN-C-BAY-SOAP-S-01', 'BIN-C-BAY', '01', ['BIN-C-BAY-SOAP-S-01-R-01', 'BIN-C-BAY-SOAP-S-01-R-02', 'BIN-C-BAY-SOAP-S-01-R-03']),
-  createShelf('BIN-D-BAY-SPEC-S-01', 'BIN-D-BAY', '01', ['BIN-D-BAY-SPEC-S-01-R-01', 'BIN-D-BAY-SPEC-S-01-R-02', 'BIN-D-BAY-SPEC-S-01-R-03']),
-  createShelf('BIN-E-BAY-RET-S-01', 'BIN-E-BAY', '01', ['BIN-E-BAY-RET-S-01-R-01', 'BIN-E-BAY-RET-S-01-R-02']),
+  // BIN-A-BAY - 2 shelves
+  createShelf('BIN-A-BAY-S-01', 'BIN-A-BAY', '01', ['BIN-A-BAY-S-01-R-01', 'BIN-A-BAY-S-01-R-02', 'BIN-A-BAY-S-01-R-03']),
+  createShelf('BIN-A-BAY-S-02', 'BIN-A-BAY', '02', ['BIN-A-BAY-S-02-R-01', 'BIN-A-BAY-S-02-R-02', 'BIN-A-BAY-S-02-R-03']),
+  // BIN-B-BAY - 2 shelves
+  createShelf('BIN-B-BAY-S-01', 'BIN-B-BAY', '01', ['BIN-B-BAY-S-01-R-01', 'BIN-B-BAY-S-01-R-02', 'BIN-B-BAY-S-01-R-03']),
+  createShelf('BIN-B-BAY-S-02', 'BIN-B-BAY', '02', ['BIN-B-BAY-S-02-R-01', 'BIN-B-BAY-S-02-R-02', 'BIN-B-BAY-S-02-R-03']),
+  // BIN-C-BAY - 2 shelves
+  createShelf('BIN-C-BAY-S-01', 'BIN-C-BAY', '01', ['BIN-C-BAY-S-01-R-01', 'BIN-C-BAY-S-01-R-02', 'BIN-C-BAY-S-01-R-03']),
+  createShelf('BIN-C-BAY-S-02', 'BIN-C-BAY', '02', ['BIN-C-BAY-S-02-R-01', 'BIN-C-BAY-S-02-R-02', 'BIN-C-BAY-S-02-R-03']),
+  // BIN-D-BAY (Returns) - 2 shelves
+  createShelf('BIN-D-BAY-S-01', 'BIN-D-BAY', '01', ['BIN-D-BAY-S-01-R-01', 'BIN-D-BAY-S-01-R-02']),
+  createShelf('BIN-D-BAY-S-02', 'BIN-D-BAY', '02', ['BIN-D-BAY-S-02-R-01', 'BIN-D-BAY-S-02-R-02']),
 ];
 
 export const USERS: User[] = [
-  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick2', name: 'Moses Kipchoge', role: 'Picker', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick3', name: 'Amara Koech', role: 'Picker', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick4', name: 'Rashid Hassan', role: 'Picker', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick5', name: 'Zainab Omondi', role: 'Picker', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
+  // Oil & Refinery Pickers
+  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick2', name: 'Moses Kipchoge', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick3', name: 'Amara Koech', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick4', name: 'Rashid Hassan', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick5', name: 'Zainab Omondi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  // Management
   { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Edible Oils', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod2', name: 'David Mutua', role: 'HOD', department: 'Margarine & Shortening', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod3', name: 'Lucy Wambui', role: 'HOD', department: 'Detergents & Soaps', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
   { id: 'dir1', name: 'Winnie Bochaberi', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
   { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
   { id: 'load1', name: 'Brian Kiptoo', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
@@ -193,21 +204,33 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
 const SLOTS_PER_RACK = 6;
 const SLOTS_PER_BAY_RACK = 6; // Changed from 4 to 6 for better utilization
 
-// Create zone-aware storage racks with standard naming (3 racks per zone)
+// Create zone-aware storage racks with standard naming (3 racks per shelf, 2 shelves per bin for Oil & Refinery)
 const createStorageRacks = (): Rack[] => {
   const rackMap: Record<string, { zoneId: string; shelfId: string }> = {
-    'BIN-A-OILS-S-01-R-01': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
-    'BIN-A-OILS-S-01-R-02': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
-    'BIN-A-OILS-S-01-R-03': { zoneId: 'BIN-A', shelfId: 'BIN-A-OILS-S-01' },
-    'BIN-B-MARG-S-01-R-01': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
-    'BIN-B-MARG-S-01-R-02': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
-    'BIN-B-MARG-S-01-R-03': { zoneId: 'BIN-B', shelfId: 'BIN-B-MARG-S-01' },
-    'BIN-C-SOAP-S-01-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
-    'BIN-C-SOAP-S-01-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
-    'BIN-C-SOAP-S-01-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-SOAP-S-01' },
-    'BIN-D-SPEC-S-01-R-01': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
-    'BIN-D-SPEC-S-01-R-02': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
-    'BIN-D-SPEC-S-01-R-03': { zoneId: 'BIN-D', shelfId: 'BIN-D-SPEC-S-01' },
+    // BIN-A (Kasuku) - Shelf 1
+    'BIN-A-S-01-R-01': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-01' },
+    'BIN-A-S-01-R-02': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-01' },
+    'BIN-A-S-01-R-03': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-01' },
+    // BIN-A (Kasuku) - Shelf 2
+    'BIN-A-S-02-R-01': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-02' },
+    'BIN-A-S-02-R-02': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-02' },
+    'BIN-A-S-02-R-03': { zoneId: 'BIN-A', shelfId: 'BIN-A-S-02' },
+    // BIN-B (Rina) - Shelf 1
+    'BIN-B-S-01-R-01': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-01' },
+    'BIN-B-S-01-R-02': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-01' },
+    'BIN-B-S-01-R-03': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-01' },
+    // BIN-B (Rina) - Shelf 2
+    'BIN-B-S-02-R-01': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-02' },
+    'BIN-B-S-02-R-02': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-02' },
+    'BIN-B-S-02-R-03': { zoneId: 'BIN-B', shelfId: 'BIN-B-S-02' },
+    // BIN-C (Prestige) - Shelf 1
+    'BIN-C-S-01-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-01' },
+    'BIN-C-S-01-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-01' },
+    'BIN-C-S-01-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-01' },
+    // BIN-C (Prestige) - Shelf 2
+    'BIN-C-S-02-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
+    'BIN-C-S-02-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
+    'BIN-C-S-02-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
   };
 
   return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({
@@ -221,23 +244,39 @@ const createStorageRacks = (): Rack[] => {
 
 export const INITIAL_RACKS: Rack[] = createStorageRacks();
 
-// Create zone-aware loading bay racks with standard naming (3 racks per zone, 6-pallet capacity)
+// Create zone-aware loading bay racks with standard naming (3 racks per shelf, 2 shelves per bin for Oil & Refinery)
 const createBayRacks = (): Rack[] => {
   const rackMap: Record<string, { zoneId: string; shelfId: string }> = {
-    'BIN-A-BAY-OILS-S-01-R-01': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
-    'BIN-A-BAY-OILS-S-01-R-02': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
-    'BIN-A-BAY-OILS-S-01-R-03': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-OILS-S-01' },
-    'BIN-B-BAY-MARG-S-01-R-01': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
-    'BIN-B-BAY-MARG-S-01-R-02': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
-    'BIN-B-BAY-MARG-S-01-R-03': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-MARG-S-01' },
-    'BIN-C-BAY-SOAP-S-01-R-01': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
-    'BIN-C-BAY-SOAP-S-01-R-02': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
-    'BIN-C-BAY-SOAP-S-01-R-03': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-SOAP-S-01' },
-    'BIN-D-BAY-SPEC-S-01-R-01': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
-    'BIN-D-BAY-SPEC-S-01-R-02': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
-    'BIN-D-BAY-SPEC-S-01-R-03': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-SPEC-S-01' },
-    'BIN-E-BAY-RET-S-01-R-01': { zoneId: 'BIN-E-BAY', shelfId: 'BIN-E-BAY-RET-S-01' },
-    'BIN-E-BAY-RET-S-01-R-02': { zoneId: 'BIN-E-BAY', shelfId: 'BIN-E-BAY-RET-S-01' },
+    // BIN-A-BAY - Shelf 1
+    'BIN-A-BAY-S-01-R-01': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-01' },
+    'BIN-A-BAY-S-01-R-02': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-01' },
+    'BIN-A-BAY-S-01-R-03': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-01' },
+    // BIN-A-BAY - Shelf 2
+    'BIN-A-BAY-S-02-R-01': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-02' },
+    'BIN-A-BAY-S-02-R-02': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-02' },
+    'BIN-A-BAY-S-02-R-03': { zoneId: 'BIN-A-BAY', shelfId: 'BIN-A-BAY-S-02' },
+    // BIN-B-BAY - Shelf 1
+    'BIN-B-BAY-S-01-R-01': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-01' },
+    'BIN-B-BAY-S-01-R-02': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-01' },
+    'BIN-B-BAY-S-01-R-03': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-01' },
+    // BIN-B-BAY - Shelf 2
+    'BIN-B-BAY-S-02-R-01': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-02' },
+    'BIN-B-BAY-S-02-R-02': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-02' },
+    'BIN-B-BAY-S-02-R-03': { zoneId: 'BIN-B-BAY', shelfId: 'BIN-B-BAY-S-02' },
+    // BIN-C-BAY - Shelf 1
+    'BIN-C-BAY-S-01-R-01': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-01' },
+    'BIN-C-BAY-S-01-R-02': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-01' },
+    'BIN-C-BAY-S-01-R-03': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-01' },
+    // BIN-C-BAY - Shelf 2
+    'BIN-C-BAY-S-02-R-01': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-02' },
+    'BIN-C-BAY-S-02-R-02': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-02' },
+    'BIN-C-BAY-S-02-R-03': { zoneId: 'BIN-C-BAY', shelfId: 'BIN-C-BAY-S-02' },
+    // BIN-D-BAY (Returns) - Shelf 1
+    'BIN-D-BAY-S-01-R-01': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-S-01' },
+    'BIN-D-BAY-S-01-R-02': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-S-01' },
+    // BIN-D-BAY (Returns) - Shelf 2
+    'BIN-D-BAY-S-02-R-01': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-S-02' },
+    'BIN-D-BAY-S-02-R-02': { zoneId: 'BIN-D-BAY', shelfId: 'BIN-D-BAY-S-02' },
   };
 
   return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({
@@ -280,3 +319,31 @@ export const INITIAL_LOADS: Load[] = [];
 export const INITIAL_HOLDS: HoldRecord[] = [];
 
 export const INITIAL_RECALL_CASES: RecallCase[] = [];
+
+// Scanner seed data with Scanner ID and Work Location
+export const INITIAL_SCANNERS: Scanner[] = [
+  {
+    id: 'SC001',
+    scannerId: 'SC001',
+    currentWorkLocation: 'Production',
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'SC002',
+    scannerId: 'SC002',
+    currentWorkLocation: 'Storage',
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'SC003',
+    scannerId: 'SC003',
+    currentWorkLocation: 'Loading Bay',
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+];

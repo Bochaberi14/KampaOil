@@ -21,6 +21,9 @@ import type {
   RecallStageName,
   SalesOrder,
   SalesOrderRelease,
+  Scanner,
+  ScannerConfigChange,
+  ScannerWorkLocation,
   SapSyncTask,
   SecurityEvent,
   Shelf,
@@ -39,6 +42,7 @@ import {
   INITIAL_PALLETS,
   INITIAL_RACKS,
   INITIAL_RECALL_CASES,
+  INITIAL_SCANNERS,
   INITIAL_TRUCKS,
   LOADING_BAY_SHELVES,
   LOADING_BAY_ZONES,
@@ -71,6 +75,7 @@ import {
   generateVehicleBarcodeId,
 } from '../engine/ids';
 import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
+import { recommendStorageLocation } from '../engine/storageRecommendation';
 import { can } from '../rbac';
 
 const RECALL_STAGE_ORDER: RecallStageName[] = ['Inspection', 'Repacking', 'Relabelling', 'QA'];
@@ -182,6 +187,16 @@ interface WarehouseState {
   currentUser: User | null;
   login: (userId: string) => boolean;
   logout: () => void;
+
+  // Scanner management
+  scanners: Scanner[];
+  scannerConfigChanges: ScannerConfigChange[];
+  updateScannerWorkLocation: (args: {
+    scannerId: string;
+    newLocation: ScannerWorkLocation;
+    operatorId: string;
+  }) => Result;
+  getScannerByWorkLocation: (location: ScannerWorkLocation) => Scanner | null;
 
   lines: Line[];
   racks: Rack[];
@@ -443,6 +458,8 @@ interface WarehouseState {
 }
 
 const seedState = () => ({
+  scanners: INITIAL_SCANNERS,
+  scannerConfigChanges: [] as ScannerConfigChange[],
   lines: INITIAL_LINES,
   racks: INITIAL_RACKS,
   bayRacks: INITIAL_BAY_RACKS,
@@ -530,6 +547,41 @@ export const useWarehouseStore = create<WarehouseState>()(
         return true;
       },
       logout: () => set({ currentUser: null }),
+
+      updateScannerWorkLocation: (args) => {
+        const { scannerId, newLocation, operatorId } = args;
+        const state = get();
+        const scanner = state.scanners.find((s) => s.id === scannerId);
+        if (!scanner) {
+          return err('Scanner not found');
+        }
+        if (!can(state.currentUser?.role, 'admin:scanner-config')) {
+          return err('Only authorized users can change scanner work location');
+        }
+        const previousLocation = scanner.currentWorkLocation;
+        set((state) => ({
+          scanners: state.scanners.map((s) =>
+            s.id === scannerId ? { ...s, currentWorkLocation: newLocation, updatedAt: new Date().toISOString() } : s
+          ),
+          scannerConfigChanges: [
+            ...state.scannerConfigChanges,
+            {
+              id: `SCC-${Date.now()}`,
+              scannerId,
+              previousLocation,
+              newLocation,
+              changedByUserId: operatorId,
+              changedAt: new Date().toISOString(),
+            },
+          ],
+        }));
+        return ok(undefined);
+      },
+
+      getScannerByWorkLocation: (location) => {
+        const state = get();
+        return state.scanners.find((s) => s.currentWorkLocation === location && s.status === 'Active') ?? null;
+      },
 
       ...seedState(),
 
@@ -701,6 +753,10 @@ export const useWarehouseStore = create<WarehouseState>()(
         const batchId = generateBatchId(po.id);
         const existingBatch = get().batches.find((b) => b.id === batchId);
         const loadId = generateLoadId();
+
+        // Generate storage recommendation for this pallet
+        const storageRec = recommendStorageLocation(state.racks, po.sku, palletId);
+
         const load: Load = {
           id: loadId,
           palletId,
@@ -777,7 +833,14 @@ export const useWarehouseStore = create<WarehouseState>()(
               : l,
           ),
           pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'Loaded', loadId } : p,
+            p.id === palletId
+              ? {
+                  ...p,
+                  status: 'Loaded',
+                  loadId,
+                  recommendedStorageLocation: storageRec ?? undefined,
+                }
+              : p,
           ),
           pickTasks: [...state.pickTasks, putAwayTask],
         }));

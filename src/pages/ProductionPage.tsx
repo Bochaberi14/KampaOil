@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { unitsPerPallet } from '../data/products';
+import { formatStorageLocation } from '../engine/storageRecommendation';
+import type { StorageRecommendation } from '../engine/storageRecommendation';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
 import { STORAGE_ZONES } from '../data/seed';
@@ -36,6 +38,7 @@ export function ProductionPage() {
   const [step, setStep] = useState<Step>('line');
   const [selectedLine, setSelectedLine] = useState<Line | null>(null);
   const [selectedPO, setSelectedPO] = useState<ProductionOrder | null>(null);
+  const [lastRecommendation, setLastRecommendation] = useState<StorageRecommendation | null>(null);
 
   const emptyPallets = pallets.filter((p) => p.status === 'Empty').map((p) => p.id);
   const openSkusForLine = selectedLine
@@ -86,10 +89,18 @@ export function ProductionPage() {
       pushToast(confirmResult.error, 'error');
       return;
     }
+
+    // Get the pallet to retrieve the recommended storage location
+    const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
+    if (updatedPallet?.recommendedStorageLocation) {
+      setLastRecommendation(updatedPallet.recommendedStorageLocation);
+    }
+
     if (confirmResult.data.poComplete) {
       setStep('line');
       setSelectedLine(null);
       setSelectedPO(null);
+      setLastRecommendation(null);
     } else {
       setStep('pallet');
     }
@@ -159,26 +170,21 @@ export function ProductionPage() {
                 />
               </div>
 
-              {(() => {
-                const zone = getZoneForSku(selectedPO.sku);
-                if (zone) {
-                  return (
-                    <div className="rounded-lg bg-indigo-500/10 border border-indigo-500/30 p-3 text-sm">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-300 mb-1">
-                        🎯 Destination Zone
-                      </p>
-                      <div className="flex items-baseline gap-2">
-                        <span className="font-semibold text-slate-100">{zone.name}</span>
-                        <span className="text-xs font-mono text-indigo-300">{zone.id}</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Pallet will move to {zone.id} after production {zone.requiresRefrigeration ? '(❄ Refrigerated)' : ''}
-                      </p>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
+              {lastRecommendation && (
+                <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4 text-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300 mb-2">
+                    ✓ Storage Destination Recommended
+                  </p>
+                  <div className="bg-emerald-900/20 rounded px-3 py-2">
+                    <p className="text-emerald-100 font-mono font-semibold">
+                      {formatStorageLocation(lastRecommendation)}
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2">
+                    Hand picker will move this pallet to the recommended location
+                  </p>
+                </div>
+              )}
             </>
           )}
 

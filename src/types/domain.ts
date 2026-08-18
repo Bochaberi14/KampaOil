@@ -9,9 +9,9 @@ export type Role =
   | 'Customer Return Clerk'
   | 'Sales Manager';
 
-export type Department = 'Edible Oils' | 'Margarine & Shortening' | 'Detergents & Soaps' | 'Specialty Products';
+export type Department = 'Oil & Refinery';
 
-export type ZoneName = 'Edible Oils' | 'Margarine & Shortening' | 'Detergents & Soaps' | 'Specialty Products' | 'Returns';
+export type ZoneName = 'Oil & Refinery' | 'Returns';
 
 export interface Zone {
   id: string;
@@ -19,6 +19,51 @@ export interface Zone {
   warehouseType: 'Storage' | 'LoadingBay';
   department: Department | 'Returns';
   requiresRefrigeration: boolean;
+}
+
+export type ScannerWorkLocation = 'Production' | 'Storage' | 'Loading Bay' | 'Dispatch';
+
+export interface Scanner {
+  id: string;
+  scannerId: string;
+  currentWorkLocation: ScannerWorkLocation;
+  status: 'Active' | 'Inactive';
+  lastUsedAt?: string;
+  lastUsedByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScannerConfigChange {
+  id: string;
+  scannerId: string;
+  previousLocation: ScannerWorkLocation;
+  newLocation: ScannerWorkLocation;
+  changedByUserId: string;
+  changedAt: string;
+}
+
+export interface Bin {
+  id: string;
+  name: string;
+  product: string;
+  warehouseType: 'Storage' | 'LoadingBay';
+  shelfIds: string[];
+}
+
+export interface BinShelf {
+  id: string;
+  binId: string;
+  shelfIndex: number;
+  rackIds: string[];
+}
+
+export interface BinRack {
+  id: string;
+  name: string;
+  binId: string;
+  shelfId: string;
+  slots: RackSlot[];
 }
 
 export interface Shelf {
@@ -107,6 +152,12 @@ export interface Pallet {
   // Active HoldRecord id, or null. A held pallet stays physically Racked —
   // this is what excludes it from FIFO, not a status change.
   holdId: string | null;
+  // Storage destination recommended by production system
+  recommendedStorageLocation?: {
+    binId: string;
+    shelfId: string;
+    rackId: string;
+  };
 }
 
 // A line has no fixed product — it runs whatever the operator scans onto it
