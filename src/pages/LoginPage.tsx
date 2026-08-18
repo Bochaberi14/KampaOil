@@ -95,9 +95,20 @@ export function LoginPage() {
     setError('');
   }
 
-  function handleDemoAccess() {
+  async function handlePickerAccess(userId: string) {
+    try {
+      login(userId);
+      await loadSapData();
+      navigate('/dashboard');
+    } catch {
+      setError('Failed to load warehouse data. Please try again.');
+    }
+  }
+
+  async function handleDemoAccess() {
     // Demo mode: skip login and go directly to dashboard
     login('dir1'); // Default to Director for demo
+    await loadSapData();
     navigate('/dashboard');
   }
 
@@ -159,10 +170,7 @@ export function LoginPage() {
                 {USERS.filter((u) => u.role === 'Picker').map((u) => (
                   <button
                     key={u.id}
-                    onClick={() => {
-                      login(u.id);
-                      navigate('/dashboard');
-                    }}
+                    onClick={() => handlePickerAccess(u.id)}
                     disabled={pending}
                     className="flex w-full items-center justify-between rounded-xl border border-slate-800 px-4 py-3 text-left hover:border-indigo-500 hover:bg-indigo-950/40 disabled:opacity-50"
                   >

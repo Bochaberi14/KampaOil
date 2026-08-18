@@ -147,10 +147,7 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
   },
 ];
 
-// SAP does NOT know the vehicle in advance — it's only known once the
-// customer/driver physically arrives to collect, at which point the Loader
-// registers it (see registerVehicleForSalesOrder). Every order therefore
-// starts with no assigned vehicle.
+// SAP pre-assigns vehicles to orders — Dispatch operator allocates to lines before arrival
 export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   {
     id: 'SO001',
@@ -162,7 +159,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:00:00.000Z',
-    assignedTruckId: null,
+    assignedTruckId: 'TRK-100',
     dispatchedPalletIds: [],
   },
   {
@@ -175,7 +172,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:05:00.000Z',
-    assignedTruckId: null,
+    assignedTruckId: 'TRK-101',
     dispatchedPalletIds: [],
   },
   {
@@ -188,7 +185,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:10:00.000Z',
-    assignedTruckId: null,
+    assignedTruckId: 'TRK-102',
     dispatchedPalletIds: [],
   },
 ];
