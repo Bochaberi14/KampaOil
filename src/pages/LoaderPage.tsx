@@ -317,19 +317,25 @@ export function LoaderPage() {
           <>
             <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-6">
               <h2 className="font-semibold text-slate-200">Vehicle</h2>
-              {!assignedTruck && (
+              {(!assignedTruck || assignedTruck.plate === 'PENDING') && (
                 <>
+                  {assignedTruck && assignedTruck.plate === 'PENDING' && (
+                    <div className="rounded-lg bg-indigo-500/10 border border-indigo-500/30 p-3 mb-3">
+                      <p className="text-xs text-indigo-300 font-medium">Vehicle has arrived</p>
+                      <p className="text-xs text-indigo-200 mt-1">Dispatch line: <span className="font-semibold">{assignedTruck.dispatchLine}</span></p>
+                    </div>
+                  )}
                   <p className="text-xs text-slate-500">
-                    SAP doesn't provide the vehicle — it's only known once the customer/driver
-                    physically arrives to collect. Look the order up by receipt, confirm the plate
-                    matches the vehicle in front of you, then register it.
+                    {assignedTruck ? 'Enter the vehicle details to complete registration.' : 'SAP doesn\'t provide the vehicle — it\'s only known once the customer/driver physically arrives to collect. Register it here.'}
                   </p>
-                  <input
-                    value={receiptRef}
-                    onChange={(e) => setReceiptRef(e.target.value)}
-                    placeholder="Receipt / order reference (optional)"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
-                  />
+                  {!assignedTruck && (
+                    <input
+                      value={receiptRef}
+                      onChange={(e) => setReceiptRef(e.target.value)}
+                      placeholder="Receipt / order reference (optional)"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+                    />
+                  )}
                   <input
                     value={plate}
                     onChange={(e) => setPlate(e.target.value)}
@@ -342,18 +348,20 @@ export function LoaderPage() {
                     placeholder="Driver name"
                     className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
                   />
-                  <label className="flex items-center gap-2 text-xs text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={plateConfirmed}
-                      onChange={(e) => setPlateConfirmed(e.target.checked)}
-                    />
-                    I confirm that the vehicle registration matches the physical vehicle.
-                  </label>
+                  {!assignedTruck && (
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={plateConfirmed}
+                        onChange={(e) => setPlateConfirmed(e.target.checked)}
+                      />
+                      I confirm that the vehicle registration matches the physical vehicle.
+                    </label>
+                  )}
                   <button
                     onClick={handleRegisterVehicle}
-                    disabled={!plate.trim() || !driverName.trim() || !plateConfirmed}
-                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+                    disabled={!plate.trim() || !driverName.trim() || (assignedTruck && assignedTruck.plate === 'PENDING' ? false : !plateConfirmed)}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40 w-full"
                   >
                     Register vehicle
                   </button>

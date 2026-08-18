@@ -330,6 +330,12 @@ interface WarehouseState {
   // Loader-only: the collecting vehicle is captured when it physically
   // arrives (SAP never provides it) — generates a permanent vehicle
   // barcode tied to this sales order.
+  allocateVehicleToSalesOrder: (args: {
+    salesOrderId: string;
+    plate: string;
+    dispatchLine: string;
+    operatorId: string;
+  }) => Result<{ truck: Truck }>;
   registerVehicleForSalesOrder: (args: {
     salesOrderId: string;
     plate: string;
@@ -1712,6 +1718,38 @@ export const useWarehouseStore = create<WarehouseState>()(
         }));
         get().pushToast(`Direct dispatch request ${approvalId} rejected`, 'error');
         return ok(undefined);
+      },
+
+      allocateVehicleToSalesOrder: ({ salesOrderId, plate, dispatchLine, operatorId: _operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot allocate a vehicle — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (so.assignedTruckId) {
+          return err(`Sales order ${salesOrderId} already has a vehicle allocated`);
+        }
+        if (!plate.trim()) return err('Vehicle plate is required');
+        if (!dispatchLine.trim()) return err('Dispatch line is required');
+
+        const truck: Truck = {
+          id: generateTruckId(),
+          plate: plate.trim(),
+          driverName: null,
+          dispatchBarcode: null,
+          status: 'Waiting',
+          salesOrderId,
+          dispatchLine,
+        };
+        set((state) => ({
+          trucks: [...state.trucks, truck],
+          salesOrders: state.salesOrders.map((s) =>
+            s.id === salesOrderId ? { ...s, assignedTruckId: truck.id } : s,
+          ),
+        }));
+        get().pushToast(`Vehicle ${truck.plate} allocated to ${dispatchLine} for ${salesOrderId}`, 'success');
+        return ok({ truck });
       },
 
       registerVehicleForSalesOrder: ({ salesOrderId, plate, driverName, operatorId }) => {

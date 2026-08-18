@@ -147,7 +147,7 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
   },
 ];
 
-// SAP pre-assigns vehicles to orders — Dispatch operator allocates to lines before arrival
+// Sales orders start unallocated — Loader allocates vehicles via Vehicle Allocation page
 export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   {
     id: 'SO001',
@@ -159,7 +159,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:00:00.000Z',
-    assignedTruckId: 'TRK-100',
+    assignedTruckId: null,
     dispatchedPalletIds: [],
   },
   {
@@ -172,7 +172,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:05:00.000Z',
-    assignedTruckId: 'TRK-101',
+    assignedTruckId: null,
     dispatchedPalletIds: [],
   },
   {
@@ -185,7 +185,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     dispatchedQty: 0,
     status: 'Pending',
     createdAt: '2026-07-27T08:10:00.000Z',
-    assignedTruckId: 'TRK-102',
+    assignedTruckId: null,
     dispatchedPalletIds: [],
   },
 ];
