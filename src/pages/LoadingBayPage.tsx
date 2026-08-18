@@ -311,7 +311,7 @@ export function LoadingBayPage() {
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Loading bay zones
-          {(currentUser?.role === 'HOD' || currentUser?.role === 'Picker') && (
+          {currentUser?.role === 'HOD' && (
             <span className="ml-2 text-xs font-normal text-slate-600">
               ({currentUser.department})
             </span>

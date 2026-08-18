@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
-import { PRODUCTS, unitsPerPallet } from '../data/products';
+import { unitsPerPallet } from '../data/products';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
 import { STORAGE_ZONES } from '../data/seed';
-import { canAccessDepartment } from '../rbac';
 import type { Line, ProductionOrder } from '../types/domain';
 
 type Step = 'line' | 'product' | 'pallet';
@@ -42,11 +41,6 @@ export function ProductionPage() {
   const openSkusForLine = selectedLine
     ? productionOrders
         .filter((p) => p.lineId === selectedLine.id && p.status === 'Open')
-        .filter((p) => {
-          // Filter by department if HOD/Picker
-          const product = PRODUCTS.find((prod) => prod.sku === p.sku);
-          return canAccessDepartment(currentUser, product?.department);
-        })
         .map((p) => p.sku)
     : [];
 
@@ -206,27 +200,11 @@ export function ProductionPage() {
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Lines
-          {(currentUser?.role === 'HOD' || currentUser?.role === 'Picker') && (
-            <span className="ml-2 text-xs font-normal text-slate-600">
-              ({currentUser.department})
-            </span>
-          )}
-        </h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Lines</h2>
         {lines.map((line) => {
           const po =
             productionOrders.find((p) => p.id === line.activeProductionOrderId) ??
             productionOrders.find((p) => p.lineId === line.id && p.status === 'Open');
-
-          // Filter by department
-          if (po) {
-            const product = PRODUCTS.find((prod) => prod.sku === po.sku);
-            if (!canAccessDepartment(currentUser, product?.department)) {
-              return null;
-            }
-          }
-
           return (
             <div key={line.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
               <div className="flex items-center justify-between">
