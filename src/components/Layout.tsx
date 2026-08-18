@@ -16,7 +16,7 @@ const NAV: { to: string; label: string; permission: Permission }[] = [
   { to: '/recall', label: '6 · Recall', permission: 'view:recall' },
   { to: '/audit', label: '7 · Audit', permission: 'view:audit' },
   { to: '/zones', label: 'Zones', permission: 'view:audit' },
-  { to: '/loader', label: 'Loader', permission: 'view:loader' },
+  { to: '/dispatch-planning', label: 'Dispatch Planning', permission: 'view:loader' },
   { to: '/returns', label: 'Returns', permission: 'view:returns' },
   { to: '/barcodes', label: 'Barcodes', permission: 'view:barcodes' },
   { to: '/security', label: '🔒 Security', permission: 'view:security' },

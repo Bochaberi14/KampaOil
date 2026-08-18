@@ -12,7 +12,7 @@ import { DispatchPage } from './pages/DispatchPage';
 import { HoldPage } from './pages/HoldPage';
 import { RecallPage } from './pages/RecallPage';
 import { AuditPage } from './pages/AuditPage';
-import { LoaderPage } from './pages/LoaderPage';
+import { DispatchPlanningPage } from './pages/DispatchPlanningPage';
 import { ReturnsPage } from './pages/ReturnsPage';
 import { BarcodesPage } from './pages/BarcodesPage';
 import { ZoneInventoryPage } from './pages/ZoneInventoryPage';
@@ -99,10 +99,10 @@ function App() {
               }
             />
             <Route
-              path="/loader"
+              path="/dispatch-planning"
               element={
                 <RoleRoute permission="view:loader">
-                  <LoaderPage />
+                  <DispatchPlanningPage />
                 </RoleRoute>
               }
             />

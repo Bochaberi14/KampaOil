@@ -4,7 +4,7 @@ import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
 import { can, canAccessDepartment } from '../rbac';
 import { PRODUCTS } from '../data/products';
-import { LOADING_BAY_ZONES } from '../data/seed';
+import { LOADING_BAY_ZONES, LOADING_BAY_SHELVES } from '../data/seed';
 
 type WizardStep = 'storage-pallet' | 'bay-rack';
 
@@ -152,6 +152,24 @@ export function LoadingBayPage() {
         <p className="text-sm text-slate-400">
           HOD requests stock, Pickers transport to bay, Loader dispatches to customers.
         </p>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+              ← Receiving Point
+            </p>
+            <p className="text-xs text-slate-500">
+              Pallets arrive from Storage. Hand pickers receive and transfer to bay forklift.
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+              Dispatch Point →
+            </p>
+            <p className="text-xs text-slate-500">
+              Pallets move to assigned Dispatch Line for vehicle loading.
+            </p>
+          </div>
+        </div>
       </div>
 
       {isHod && (
@@ -308,9 +326,9 @@ export function LoadingBayPage() {
         </div>
       )}
 
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Loading bay zones
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-300">
+          Loading Bay Zones
           {currentUser?.role === 'HOD' && (
             <span className="ml-2 text-xs font-normal text-slate-600">
               ({currentUser.department})
@@ -320,15 +338,15 @@ export function LoadingBayPage() {
         <div className="space-y-6">
           {LOADING_BAY_ZONES.filter((zone) => {
             // Returns zone always visible; only HODs are filtered by department
-            if (zone.id === 'BIN-E-BAY') return true;
+            if (zone.id === 'BIN-D-BAY') return true;
             if (currentUser?.role === 'HOD') {
               return canAccessDepartment(currentUser, zone.department as string);
             }
-            return true; // Pickers and others see everything
+            return true;
           }).map((zone) => {
-            const zoneRacks = bayRacks.filter((r) => r.zoneId === zone.id);
+            const zoneShelves = LOADING_BAY_SHELVES.filter((s) => s.zoneId === zone.id);
             return (
-              <div key={zone.id} className="space-y-2">
+              <div key={zone.id} className="space-y-3">
                 <div className="flex items-baseline gap-3">
                   <h3 className="font-semibold text-slate-100">{zone.name}</h3>
                   <span className="text-xs font-mono text-slate-500">{zone.id}</span>
@@ -336,10 +354,23 @@ export function LoadingBayPage() {
                     <span className="text-xs text-blue-300 font-medium">❄ Refrigerated</span>
                   )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {zoneRacks.map((b) => (
-                    <RackGrid key={b.id} rack={b} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
-                  ))}
+                <div className="space-y-4">
+                  {zoneShelves.map((shelf) => {
+                    const shelfRacks = bayRacks.filter((r) => r.shelfId === shelf.id);
+                    const shelfNum = shelf.index;
+                    return (
+                      <div key={shelf.id} className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Shelf {shelfNum}
+                        </p>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          {shelfRacks.map((b) => (
+                            <RackGrid key={b.id} rack={b} highlightPalletId={wizard.palletId ?? undefined} loads={loads} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );

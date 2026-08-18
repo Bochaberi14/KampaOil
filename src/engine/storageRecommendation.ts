@@ -4,19 +4,20 @@ export interface StorageRecommendation {
   binId: string;
   shelfId: string;
   rackId: string;
+  isOverflow?: boolean;
 }
 
-// Simple round-robin strategy: distribute pallets across bins and shelves
-// to balance load. Each bin product gets assigned proportionally.
+// Recommend storage location with overflow fallback
+// Returns recommendation for designated bin, or OVERFLOW if bin is full
 export function recommendStorageLocation(
   racks: Rack[],
   sku: string,
   _palletId: string,
 ): StorageRecommendation | null {
-  // Map SKU to bin ID
+  // Map SKU to bin ID (Product-specific bins)
   const skuToBin: Record<string, string> = {
-    'KASUKU1KG': 'BIN-A',
-    'RINA1L': 'BIN-B',
+    'RINA1L': 'BIN-A',
+    'KASUKU1KG': 'BIN-B',
     'PRESTIGE500G': 'BIN-C',
   };
 
@@ -25,17 +26,33 @@ export function recommendStorageLocation(
 
   // Get all racks in the target bin
   const binRacks = racks.filter((r) => r.zoneId === targetBin);
-  if (binRacks.length === 0) return null;
 
-  // Find the rack with available slots
+  // Find the rack with available slots in designated bin
   const availableRack = binRacks.find((r) => r.slots.some((s) => !s.palletId));
-  if (!availableRack) return null;
+  if (availableRack) {
+    return {
+      binId: targetBin,
+      shelfId: availableRack.shelfId || targetBin,
+      rackId: availableRack.id,
+      isOverflow: false,
+    };
+  }
 
-  return {
-    binId: targetBin,
-    shelfId: availableRack.shelfId || targetBin,
-    rackId: availableRack.id,
-  };
+  // Designated bin is full — try OVERFLOW
+  const overflowRacks = racks.filter((r) => r.zoneId === 'OVERFLOW');
+  const overflowAvailableRack = overflowRacks.find((r) => r.slots.some((s) => !s.palletId));
+
+  if (overflowAvailableRack) {
+    return {
+      binId: 'OVERFLOW',
+      shelfId: overflowAvailableRack.shelfId || 'OVERFLOW',
+      rackId: overflowAvailableRack.id,
+      isOverflow: true,
+    };
+  }
+
+  // Both bin and overflow are full
+  return null;
 }
 
 // Get the first available slot in a rack

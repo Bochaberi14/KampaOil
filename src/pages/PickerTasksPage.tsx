@@ -47,6 +47,7 @@ export function PickerTasksPage() {
     if (task.origin === 'Production') return 'Put-away (Production)';
     if (task.origin === 'Storage') return 'Pick (Storage)';
     if (task.origin === 'Bay-Topup') return 'Pick (Bay Top-up)';
+    if (task.origin === 'Dispatch') return 'Dispatch Picking';
     return task.origin;
   };
 
@@ -56,6 +57,9 @@ export function PickerTasksPage() {
     }
     if (task.origin === 'Storage') {
       return 'Release pallets from storage to loading bay: scan pallet → scan bay rack';
+    }
+    if (task.origin === 'Dispatch') {
+      return 'Pick products from bay and stage at assigned dispatch line';
     }
     return 'Release pallets to loading bay';
   };

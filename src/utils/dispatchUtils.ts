@@ -1,6 +1,6 @@
 import { PRODUCTS } from '../data/products';
 import { USERS } from '../data/seed';
-import type { Department, User } from '../types/domain';
+import type { Department, User, PickTask } from '../types/domain';
 
 /**
  * Get all pickers from a specific department.
@@ -28,6 +28,20 @@ export function isPickerCompatibleWithSku(pickerId: string, sku: string): boolea
   if (!productDept) return true; // Product not found, allow assignment
 
   return picker.department === productDept;
+}
+
+/**
+ * Get available pickers for dispatch picking tasks.
+ * Returns pickers from Oil & Refinery department with no active tasks.
+ */
+export function getAvailablePickersForDispatch(pickTasks: PickTask[]): User[] {
+  return USERS.filter((u) => {
+    if (u.role !== 'Picker' || u.department !== 'Oil & Refinery') return false;
+
+    // Check if picker has any active (Accepted) tasks
+    const hasActiveTask = pickTasks.some((t) => t.assignedPickerId === u.id && t.status === 'Accepted');
+    return !hasActiveTask;
+  });
 }
 
 /**

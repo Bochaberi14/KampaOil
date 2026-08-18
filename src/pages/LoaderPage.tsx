@@ -6,6 +6,7 @@ import { Barcode } from '../components/Barcode';
 import { ScanInput } from '../components/ScanInput';
 import { DispatchManifest } from '../components/DispatchManifest';
 import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
+import { HandoverVerificationDocument } from '../components/HandoverVerificationDocument';
 import { USERS } from '../data/seed';
 import type { SalesOrder } from '../types/domain';
 
@@ -836,39 +837,55 @@ export function LoaderPage() {
                 )}
 
                 {soVerification.status === 'VehicleVerified' && (
-                  <div className="space-y-2 border-t border-slate-800 pt-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
-                      Vehicle verified — {assignedTruck?.plate}
-                    </p>
-                    <input
-                      value={signForm.driverName}
-                      onChange={(e) => setSignForm((f) => ({ ...f, driverName: e.target.value }))}
-                      placeholder="Driver name"
-                      className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
-                    />
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <div className="space-y-4 border-t border-slate-800 pt-4">
+                    <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300 mb-3">
+                        ✓ Vehicle verified — {assignedTruck?.plate}
+                      </p>
+                      <p className="text-xs text-slate-300 mb-3">Counter-check before both parties sign:</p>
+                      <div className="space-y-2">
+                        {soVerification.products.map((p) => (
+                          <label key={p.sku} className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer hover:bg-slate-800/40 p-2 rounded">
+                            <input type="checkbox" className="mt-0.5" />
+                            <span>
+                              <strong>{p.productName}</strong> — {p.pickedQty} units ({Math.ceil(p.pickedQty / 100)} pallets)
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
                       <input
-                        type="checkbox"
-                        checked={signForm.loaderConfirmed}
-                        onChange={(e) => setSignForm((f) => ({ ...f, loaderConfirmed: e.target.checked }))}
+                        value={signForm.driverName}
+                        onChange={(e) => setSignForm((f) => ({ ...f, driverName: e.target.value }))}
+                        placeholder="Driver name"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
                       />
-                      Loader confirms the goods match the printout
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={signForm.driverConfirmed}
-                        onChange={(e) => setSignForm((f) => ({ ...f, driverConfirmed: e.target.checked }))}
-                      />
-                      Driver confirms the goods match the printout
-                    </label>
-                    <button
-                      onClick={handleSign}
-                      disabled={!signForm.driverName.trim() || !signForm.loaderConfirmed || !signForm.driverConfirmed}
-                      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
-                    >
-                      Sign &amp; complete handover
-                    </button>
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={signForm.loaderConfirmed}
+                          onChange={(e) => setSignForm((f) => ({ ...f, loaderConfirmed: e.target.checked }))}
+                        />
+                        Loader confirms all goods match the manifest
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={signForm.driverConfirmed}
+                          onChange={(e) => setSignForm((f) => ({ ...f, driverConfirmed: e.target.checked }))}
+                        />
+                        Driver confirms all goods received and condition acceptable
+                      </label>
+                      <button
+                        onClick={handleSign}
+                        disabled={!signForm.driverName.trim() || !signForm.loaderConfirmed || !signForm.driverConfirmed}
+                        className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                      >
+                        Both Parties Sign &amp; Complete Handover
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -892,6 +909,11 @@ export function LoaderPage() {
                         salesOrderId={soVerification.salesOrderId}
                         customerName={soVerification.customer}
                         dispatchLine={soVerification.dispatchLine}
+                      />
+                      <div style={{ pageBreakAfter: 'always' }} />
+                      <HandoverVerificationDocument
+                        verification={soVerification}
+                        loaderName={currentUser?.name || 'Unknown Loader'}
                       />
                     </div>
                   </div>

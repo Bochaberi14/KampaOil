@@ -49,24 +49,30 @@ const createShelf = (id: string, zoneId: string, shelfNum: string, rackIds: stri
   rackIds,
 });
 
-// STORAGE ZONES: BIN-A (Kasuku), BIN-B (Rina), BIN-C (Prestige)
+// STORAGE ZONES: BIN-A (Rina 1L), BIN-B (Kasuku 1kg), BIN-C (Prestige 500g), OVERFLOW
 export const STORAGE_ZONES: Zone[] = [
   createZone('BIN-A', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
   createZone('BIN-B', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
   createZone('BIN-C', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
+  createZone('OVERFLOW', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
 ];
 
 // STORAGE SHELVES: Each zone has 2 shelves (S-01, S-02) with 3 racks each
+// OVERFLOW has 3 shelves with 4 racks each for excess production
 export const STORAGE_SHELVES: Shelf[] = [
-  // BIN-A (Kasuku) - 2 shelves
+  // BIN-A (Rina 1L) - 2 shelves
   createShelf('BIN-A-S-01', 'BIN-A', '01', ['BIN-A-S-01-R-01', 'BIN-A-S-01-R-02', 'BIN-A-S-01-R-03']),
   createShelf('BIN-A-S-02', 'BIN-A', '02', ['BIN-A-S-02-R-01', 'BIN-A-S-02-R-02', 'BIN-A-S-02-R-03']),
-  // BIN-B (Rina) - 2 shelves
+  // BIN-B (Kasuku 1kg) - 2 shelves
   createShelf('BIN-B-S-01', 'BIN-B', '01', ['BIN-B-S-01-R-01', 'BIN-B-S-01-R-02', 'BIN-B-S-01-R-03']),
   createShelf('BIN-B-S-02', 'BIN-B', '02', ['BIN-B-S-02-R-01', 'BIN-B-S-02-R-02', 'BIN-B-S-02-R-03']),
-  // BIN-C (Prestige) - 2 shelves
+  // BIN-C (Prestige 500g) - 2 shelves
   createShelf('BIN-C-S-01', 'BIN-C', '01', ['BIN-C-S-01-R-01', 'BIN-C-S-01-R-02', 'BIN-C-S-01-R-03']),
   createShelf('BIN-C-S-02', 'BIN-C', '02', ['BIN-C-S-02-R-01', 'BIN-C-S-02-R-02', 'BIN-C-S-02-R-03']),
+  // OVERFLOW - 3 shelves with 4 racks each
+  createShelf('OVERFLOW-S-01', 'OVERFLOW', '01', ['OVERFLOW-S-01-R-01', 'OVERFLOW-S-01-R-02', 'OVERFLOW-S-01-R-03', 'OVERFLOW-S-01-R-04']),
+  createShelf('OVERFLOW-S-02', 'OVERFLOW', '02', ['OVERFLOW-S-02-R-01', 'OVERFLOW-S-02-R-02', 'OVERFLOW-S-02-R-03', 'OVERFLOW-S-02-R-04']),
+  createShelf('OVERFLOW-S-03', 'OVERFLOW', '03', ['OVERFLOW-S-03-R-01', 'OVERFLOW-S-03-R-02', 'OVERFLOW-S-03-R-03', 'OVERFLOW-S-03-R-04']),
 ];
 
 // LOADING BAY ZONES: BIN-A, BIN-B, BIN-C (products) + BIN-D (returns)
@@ -138,8 +144,8 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
   },
   {
     id: 'PO002',
-    sku: 'TOSS500G',
-    productName: 'Toss 500g',
+    sku: 'KASUKU1KG',
+    productName: 'Kasuku 1kg',
     lineId: 'L002',
     targetQty: 5000,
     createdAt: '2026-07-20T08:00:00.000Z',
@@ -162,7 +168,7 @@ export const INITIAL_PRODUCTION_ORDERS: ProductionOrder[] = [
 export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   {
     id: 'SO001',
-    customer: 'Customer ABC',
+    customer: 'Joy',
     sku: 'RINA1L',
     productName: 'Rina 1L',
     qty: 2000,
@@ -175,9 +181,9 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   },
   {
     id: 'SO002',
-    customer: 'Customer XYZ',
-    sku: 'TOSS500G',
-    productName: 'Toss 500g',
+    customer: 'Laura',
+    sku: 'KASUKU1KG',
+    productName: 'Kasuku 1kg',
     qty: 1500,
     releasedQty: 0,
     dispatchedQty: 0,
@@ -188,7 +194,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
   },
   {
     id: 'SO003',
-    customer: 'Customer QRS',
+    customer: 'Tasha',
     sku: 'PRESTIGE500G',
     productName: 'Prestige 500g',
     qty: 1000,
@@ -231,6 +237,21 @@ const createStorageRacks = (): Rack[] => {
     'BIN-C-S-02-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
     'BIN-C-S-02-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
     'BIN-C-S-02-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
+    // OVERFLOW - Shelf 1 (4 racks)
+    'OVERFLOW-S-01-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
+    'OVERFLOW-S-01-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
+    'OVERFLOW-S-01-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
+    'OVERFLOW-S-01-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
+    // OVERFLOW - Shelf 2 (4 racks)
+    'OVERFLOW-S-02-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
+    'OVERFLOW-S-02-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
+    'OVERFLOW-S-02-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
+    'OVERFLOW-S-02-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
+    // OVERFLOW - Shelf 3 (4 racks)
+    'OVERFLOW-S-03-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
+    'OVERFLOW-S-03-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
+    'OVERFLOW-S-03-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
+    'OVERFLOW-S-03-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
   };
 
   return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({

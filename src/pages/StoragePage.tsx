@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
-import { countFreeRackSlots, countRackedPallets, findFreeRackSlot } from '../engine/rules';
+import { countFreeRackSlots, countRackedPallets } from '../engine/rules';
+import { recommendStorageLocation, formatStorageLocation } from '../engine/storageRecommendation';
 import { STORAGE_ZONES } from '../data/seed';
 import { canAccessDepartment } from '../rbac';
 
@@ -50,15 +51,38 @@ export function StoragePage() {
 
   function handleScanRack(rackId: string) {
     if (!wizard.palletId || !currentUser) return;
-    const result = scanPalletToRack({ palletId: wizard.palletId, rackId, operatorId: currentUser.id });
-    if (!result.ok) {
-      const nextFree = findFreeRackSlot(racks);
+
+    const pallet = pallets.find((p) => p.id === wizard.palletId);
+    if (!pallet) return;
+
+    // Find the load to get the SKU
+    const load = loads.find((l) => l.palletId === wizard.palletId);
+    if (!load) return;
+
+    // DYNAMICALLY calculate the recommended location based on CURRENT rack state
+    // This ensures we always know which racks are full and which have slots
+    const freshRecommendation = recommendStorageLocation(racks, load.sku, wizard.palletId);
+    if (!freshRecommendation) {
+      pushToast(`❌ No available rack space in the designated bin for ${load.productName}`, 'error');
+      return;
+    }
+
+    // Strict validation: pallet MUST scan to the CURRENT recommended rack
+    if (rackId !== freshRecommendation.rackId) {
       pushToast(
-        nextFree ? `${result.error} — try ${nextFree.rackId} instead` : result.error,
+        `❌ Wrong location! ${pallet.id} must go to ${formatStorageLocation(freshRecommendation)}. Scanned ${rackId} instead. Scan the correct rack.`,
         'error',
       );
       return;
     }
+
+    const result = scanPalletToRack({ palletId: wizard.palletId, rackId, operatorId: currentUser.id });
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+      return;
+    }
+
+    pushToast(`✓ Correct location! Pallet ${wizard.palletId} racked to ${formatStorageLocation(freshRecommendation)}`, 'success');
     setWizard({ step: 'pallet', palletId: null });
   }
 
@@ -100,9 +124,12 @@ export function StoragePage() {
 
         {wizard.step === 'rack' &&
           (() => {
-            const recommended = findFreeRackSlot(racks);
-            const orderedRackIds = recommended
-              ? [recommended.rackId, ...racks.map((r) => r.id).filter((id) => id !== recommended.rackId)]
+            const load = loads.find((l) => l.palletId === wizard.palletId);
+
+            // DYNAMICALLY calculate recommendation based on CURRENT rack state
+            const freshRecommendation = load && wizard.palletId ? recommendStorageLocation(racks, load.sku, wizard.palletId) : null;
+            const orderedRackIds = freshRecommendation
+              ? [freshRecommendation.rackId, ...racks.map((r) => r.id).filter((id) => id !== freshRecommendation.rackId)]
               : racks.map((r) => r.id);
             return (
               <>
@@ -110,18 +137,38 @@ export function StoragePage() {
                   Pallet <span className="font-mono font-semibold text-slate-100">{wizard.palletId}</span>{' '}
                   is in transit to storage — now scan the destination rack.
                 </p>
-                {recommended ? (
-                  <p className="rounded-lg bg-indigo-500/10 px-3 py-2 text-xs text-indigo-300">
-                    Recommended: Rack {recommended.rackId} — slot {recommended.slotIndex + 1} is free.
-                  </p>
+                {freshRecommendation ? (
+                  <div
+                    className={`rounded-lg px-4 py-3 text-sm border ${
+                      freshRecommendation.isOverflow
+                        ? 'bg-amber-500/10 border-amber-500/30'
+                        : 'bg-emerald-500/10 border-emerald-500/30'
+                    }`}
+                  >
+                    <p
+                      className={`text-xs font-semibold uppercase tracking-wide mb-2 ${
+                        freshRecommendation.isOverflow ? 'text-amber-300' : 'text-emerald-300'
+                      }`}
+                    >
+                      {freshRecommendation.isOverflow ? '⚠️  Overflow Alert' : '📍 Recommended Storage Location'}
+                    </p>
+                    <p className={`font-mono font-semibold text-base ${freshRecommendation.isOverflow ? 'text-amber-100' : 'text-emerald-100'}`}>
+                      {formatStorageLocation(freshRecommendation)}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {freshRecommendation.isOverflow
+                        ? `Designated bin for ${load?.productName} is FULL. Pallet will be stored in OVERFLOW — move to proper bin when space opens.`
+                        : `Scan this rack — it's the first available slot in the designated bin`}
+                    </p>
+                  </div>
                 ) : (
-                  <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                    All racks are full — no free slot available.
+                  <p className="rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3 text-xs text-red-300">
+                    ❌ No available rack space — both designated bin and OVERFLOW are full for {load?.productName}
                   </p>
                 )}
                 <ScanInput
                   label="Scan rack barcode"
-                  placeholder="e.g. R-A"
+                  placeholder="e.g. BIN-A-S-01-R-01"
                   onScan={handleScanRack}
                   suggestions={orderedRackIds}
                 />

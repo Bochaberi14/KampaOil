@@ -106,7 +106,7 @@ export const ROUTE_PERMISSION: Record<string, Permission> = {
   '/hold': 'view:hold',
   '/recall': 'view:recall',
   '/audit': 'view:audit',
-  '/loader': 'view:loader',
+  '/dispatch-planning': 'view:loader',
   '/returns': 'view:returns',
   '/barcodes': 'view:barcodes',
   '/security': 'view:security',
