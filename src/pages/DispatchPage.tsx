@@ -6,6 +6,12 @@ import { StatusPill } from '../components/StatusPill';
 import { TruckCard } from '../components/EntityCards';
 import { can } from '../rbac';
 import { USERS } from '../data/seed';
+import {
+  calculateSmartDispatchSuggestion,
+  formatDispatchSuggestion,
+  getPickersForDepartment,
+  getProductDepartment,
+} from '../utils/dispatchUtils';
 
 function userName(userId: string): string {
   return USERS.find((u) => u.id === userId)?.name ?? userId;
@@ -21,6 +27,8 @@ export function DispatchPage() {
   const dispatchVerifications = useWarehouseStore((s) => s.dispatchVerifications);
   const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
+  const availableInStorage = useWarehouseStore((s) => s.availableInStorage);
+  const availableInProduction = useWarehouseStore((s) => s.availableInProduction);
   const divertLoadedPalletToDirectDispatch = useWarehouseStore((s) => s.divertLoadedPalletToDirectDispatch);
   const scanDispatchLine = useWarehouseStore((s) => s.scanDispatchLine);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
@@ -47,6 +55,23 @@ export function DispatchPage() {
   const remaining = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
   const available = selectedSO ? availableOnBay(selectedSO.sku) : 0;
   const assignedTruck = selectedSO ? trucks.find((t) => t.id === selectedSO.assignedTruckId) : undefined;
+
+  // Smart dispatch: calculate available inventory from bay, storage, and production
+  const dispatchSuggestion = selectedSO
+    ? calculateSmartDispatchSuggestion(
+        selectedSO.sku,
+        remaining,
+        availableOnBay(selectedSO.sku),
+        availableInStorage(selectedSO.sku),
+        availableInProduction(selectedSO.sku),
+      )
+    : null;
+
+  const formattedSuggestion = dispatchSuggestion ? formatDispatchSuggestion(dispatchSuggestion) : null;
+
+  // Picker department filtering: get eligible pickers for this product
+  const productDept = selectedSO ? getProductDepartment(selectedSO.sku) : undefined;
+  const eligiblePickers = productDept ? getPickersForDepartment(productDept) : [];
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
   const pickingComplete = soPickTasks.length > 0 && soPickTasks.every((t) => t.status === 'Completed');
@@ -327,6 +352,34 @@ export function DispatchPage() {
                   ))}
                 </ul>
               </div>
+
+              {dispatchSuggestion && formattedSuggestion && (
+                <div className="border-t border-slate-700 pt-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Smart dispatch availability</p>
+                  <div className={`mt-2 space-y-1 text-xs ${formattedSuggestion.isShortfall ? 'text-amber-300' : 'text-emerald-300'}`}>
+                    {formattedSuggestion.lines.map((line, idx) => (
+                      <p key={idx} className="font-mono">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Priority: Bay ({dispatchSuggestion.fromBay.toLocaleString()}) → Storage ({dispatchSuggestion.fromStorage.toLocaleString()}) → Production ({dispatchSuggestion.fromProduction.toLocaleString()})
+                  </p>
+                </div>
+              )}
+
+              {productDept && (
+                <div className="border-t border-slate-700 pt-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Department & picker assignment</p>
+                  <p className="mt-1 text-xs text-slate-300">
+                    Product: <span className="font-medium text-indigo-300">{productDept}</span>
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    Eligible pickers: {eligiblePickers.length > 0 ? eligiblePickers.map((p) => p.name).join(', ') : 'None available'}
+                  </p>
+                </div>
+              )}
 
               {selectedSOVerification && (
                 <div className="flex items-center justify-between border-t border-slate-700 pt-2 text-xs">

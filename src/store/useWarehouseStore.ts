@@ -298,6 +298,8 @@ interface WarehouseState {
 
   // Stage 4 — Dispatch
   availableOnBay: (sku: string) => number;
+  availableInStorage: (sku: string) => number;
+  availableInProduction: (sku: string) => number;
   requestTopUp: (salesOrderId: string) => Result<{ task: PickTask }>;
   // Loader pre-plans how much of a sales order goes on a given truck — lets
   // one large order be split across several trucks instead of 1 SO : 1 truck.
@@ -1366,6 +1368,29 @@ export const useWarehouseStore = create<WarehouseState>()(
             }, 0)
           );
         }, 0);
+      },
+
+      availableInStorage: (sku) => {
+        const state = get();
+        // Sum all Racked pallets that match the SKU (excluding held/reserved stock)
+        const reserved = reservedPalletIds(state.pickTasks);
+        return state.pallets
+          .filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id))
+          .reduce((sum, pallet) => {
+            const load = state.loads.find((l) => l.palletId === pallet.id);
+            return sum + (load && load.sku === sku ? load.quantity : 0);
+          }, 0);
+      },
+
+      availableInProduction: (sku) => {
+        const state = get();
+        // Sum all Loaded pallets (still on production lines) that match the SKU
+        return state.pallets
+          .filter((p) => p.status === 'Loaded')
+          .reduce((sum, pallet) => {
+            const load = state.loads.find((l) => l.palletId === pallet.id);
+            return sum + (load && load.sku === sku ? load.quantity : 0);
+          }, 0);
       },
 
       requestTopUp: (salesOrderId) => {
