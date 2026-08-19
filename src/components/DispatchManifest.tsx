@@ -10,7 +10,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
   const palletCount = verification.palletIds.length;
 
   return (
-    <div className="space-y-6 bg-white p-12 text-black print-sheet-content">
+    <div className="space-y-6 bg-white p-12 text-black">
       {/* Header */}
       <div className="border-b-2 border-black pb-4">
         <h1 className="text-2xl font-bold">DISPATCH MANIFEST</h1>
@@ -66,6 +66,31 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
         </div>
       </div>
 
+      {/* Release Items Checklist */}
+      <div>
+        <h2 className="font-semibold mb-3 border-b border-black pb-2">Released Items Checklist</h2>
+        <div className="space-y-2">
+          {verification.products.map((product) => {
+            const pallets = Math.ceil(product.pickedQty / unitsPerPallet(product.sku));
+            return (
+              <div key={product.sku} className="flex items-start gap-3 text-sm py-1">
+                <input
+                  type="checkbox"
+                  className="mt-1 w-4 h-4 cursor-pointer"
+                  style={{ accentColor: '#000' }}
+                />
+                <div className="flex-1">
+                  <p className="font-medium">{product.productName}</p>
+                  <p className="text-xs text-gray-600">
+                    {product.pickedQty} units ({pallets} pallets) of {product.releasedQty} released
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Pallet Summary */}
       <div className="bg-gray-100 p-4 rounded">
         <p className="text-sm">
@@ -74,42 +99,69 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
         <p className="text-xs text-gray-600 mt-1">Pallet IDs: {verification.palletIds.join(', ')}</p>
       </div>
 
-      {/* Personnel Section */}
-      <div className="grid grid-cols-2 gap-8 mt-8 border-t-2 border-black pt-6">
-        {/* Loader Section */}
-        <div>
-          <h3 className="font-semibold mb-4">Warehouse Loader</h3>
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs text-gray-600">Name</p>
-              <p className="text-sm font-medium">{loaderName}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-600 mb-1">Signature</p>
-              <div className="w-full h-16 border-b-2 border-black"></div>
-            </div>
-            <div>
-              <p className="text-xs text-gray-600">Date/Time</p>
-              <p className="text-sm">_______________________</p>
-            </div>
+      {/* Handover Verification Section */}
+      <div className="mt-8 border-t-2 border-black pt-6">
+        <h2 className="text-lg font-bold mb-6">HANDOVER SIGN-OFF</h2>
+
+        {/* Pre-dispatch Checklist */}
+        <div className="mb-6 bg-gray-50 p-4 rounded border border-gray-300">
+          <p className="font-semibold text-sm mb-3">Before Dispatch Confirmation:</p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" style={{ accentColor: '#000' }} />
+              All products verified correct ✓
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" style={{ accentColor: '#000' }} />
+              Quantity matches documentation ✓
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" style={{ accentColor: '#000' }} />
+              Goods condition acceptable ✓
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" style={{ accentColor: '#000' }} />
+              Pallet IDs match manifest ✓
+            </label>
           </div>
         </div>
 
-        {/* Driver Section */}
-        <div>
-          <h3 className="font-semibold mb-4">Vehicle Driver</h3>
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs text-gray-600">Name</p>
-              <p className="text-sm font-medium">{verification.driverName || '______________________'}</p>
+        <div className="grid grid-cols-2 gap-8">
+          {/* Loader Section */}
+          <div>
+            <h3 className="font-semibold mb-4">Warehouse Loader</h3>
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs text-gray-600">Name</p>
+                <p className="text-sm font-medium">{loaderName}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Signature</p>
+                <div className="w-full h-16 border-b-2 border-black"></div>
+              </div>
+              <div>
+                <p className="text-xs text-gray-600">Date/Time</p>
+                <p className="text-sm">_______________________</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-gray-600 mb-1">Signature</p>
-              <div className="w-full h-16 border-b-2 border-black"></div>
-            </div>
-            <div>
-              <p className="text-xs text-gray-600">Date/Time</p>
-              <p className="text-sm">_______________________</p>
+          </div>
+
+          {/* Driver Section */}
+          <div>
+            <h3 className="font-semibold mb-4">Vehicle Driver</h3>
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs text-gray-600">Name</p>
+                <p className="text-sm font-medium">{verification.driverName || '______________________'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Signature</p>
+                <div className="w-full h-16 border-b-2 border-black"></div>
+              </div>
+              <div>
+                <p className="text-xs text-gray-600">Date/Time</p>
+                <p className="text-sm">_______________________</p>
+              </div>
             </div>
           </div>
         </div>

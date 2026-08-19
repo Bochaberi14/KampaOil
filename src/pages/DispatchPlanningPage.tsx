@@ -3,7 +3,6 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { PrintSheet } from '../components/PrintSheet';
 import { DispatchManifest } from '../components/DispatchManifest';
 import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
-import { HandoverVerificationDocument } from '../components/HandoverVerificationDocument';
 import { filterPickersByType } from '../rbac';
 import { USERS } from '../data/seed';
 import { calculateSmartDispatchSuggestion, formatDispatchSuggestion } from '../utils/dispatchUtils';
@@ -28,8 +27,9 @@ export function DispatchPlanningPage() {
   const currentUser = useWarehouseStore((s) => s.currentUser);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const releaseSalesOrderQuantity = useWarehouseStore((s) => s.releaseSalesOrderQuantity);
-  const assignPickTaskToPickers = useWarehouseStore((s) => s.assignPickTaskToPickers);
+  const assignDispatchPickingTasks = useWarehouseStore((s) => s.assignDispatchPickingTasks);
   const registerVehicleForSalesOrder = useWarehouseStore((s) => s.registerVehicleForSalesOrder);
+  const generateManifestForPickingComplete = useWarehouseStore((s) => s.generateManifestForPickingComplete);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
   const availableInStorage = useWarehouseStore((s) => s.availableInStorage);
@@ -44,6 +44,7 @@ export function DispatchPlanningPage() {
   const [driverName, setDriverName] = useState('');
   const [plateConfirmed, setPlateConfirmed] = useState(false);
   const [lastRelease, setLastRelease] = useState<{ soId: string; qty: number } | null>(null);
+  const [showGenerateButton, setShowGenerateButton] = useState<string | null>(null);
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
   const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
@@ -101,6 +102,7 @@ export function DispatchPlanningPage() {
     }
     pushToast(`Released ${parsedQty} units for ${selectedSO.id}`, 'success');
     setLastRelease({ soId: selectedSO.id, qty: parsedQty });
+    setShowGenerateButton(selectedSO.id);
     setReleaseQty('');
   }
 
@@ -144,7 +146,7 @@ export function DispatchPlanningPage() {
       return;
     }
 
-    const result = assignPickTaskToPickers({
+    const result = assignDispatchPickingTasks({
       salesOrderId: selectedSO.id,
       assignments,
       operatorId: currentUser.id,
@@ -153,7 +155,7 @@ export function DispatchPlanningPage() {
       pushToast(result.error, 'error');
       return;
     }
-    pushToast(`Assigned ${assignments.length} picker(s) to ${selectedSO.id}`, 'success');
+    pushToast(`Assigned ${assignments.length} picker(s) for dispatch picking`, 'success');
     setPickerRows([{ pickerId: '', qty: '' }]);
   }
 
@@ -178,6 +180,20 @@ export function DispatchPlanningPage() {
     setDriverName('');
   }
 
+
+  function handleGenerateManifest(soId: string) {
+    if (!currentUser) return;
+    const result = generateManifestForPickingComplete({
+      salesOrderId: soId,
+      operatorId: currentUser.id,
+    });
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+    } else {
+      pushToast('✓ Dispatch documents generated — ready to print', 'success');
+      setShowGenerateButton(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -283,6 +299,8 @@ export function DispatchPlanningPage() {
               availableInStorage={availableInStorage}
               availableInProduction={availableInProduction}
               lastRelease={lastRelease}
+              handleGenerateManifest={handleGenerateManifest}
+              showGenerateButton={showGenerateButton}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -324,6 +342,8 @@ function DispatchOrderPanel({
   availableOnBay,
   availableInStorage,
   availableInProduction,
+  handleGenerateManifest,
+  showGenerateButton,
 }: any) {
   const trucks = useWarehouseStore((s) => s.trucks);
   const assignedTruck = order.assignedTruckId ? trucks.find((t) => t.id === order.assignedTruckId) : undefined;
@@ -426,7 +446,7 @@ function DispatchOrderPanel({
       )}
 
       {/* STEP 3 & 4: Release Quantity + Assign Pickers (BUNDLED) */}
-      {dispatchLine && assignedTruck && soPickTasks.length === 0 && remainingToRelease > 0 && (
+      {(dispatchLine || assignedTruck?.dispatchLine) && assignedTruck && remainingToRelease > 0 && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Steps 3 & 4: Release Quantity + Assign Pickers</p>
 
@@ -474,7 +494,7 @@ function DispatchOrderPanel({
                   setReleaseQty(val);
                 }
               }}
-              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white"
+              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white [&::-webkit-outer-spin-button]:hidden [&::-webkit-inner-spin-button]:hidden"
               placeholder="Enter quantity"
             />
           </div>
@@ -536,7 +556,7 @@ function DispatchOrderPanel({
                       }
                     }}
                     placeholder="Qty"
-                    className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
+                    className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white [&::-webkit-outer-spin-button]:hidden [&::-webkit-inner-spin-button]:hidden"
                   />
                   {pickerRows.length > 1 && (
                     <button
@@ -582,13 +602,29 @@ function DispatchOrderPanel({
         </div>
       )}
 
+      {/* Generate Manifest after release */}
+      {assignedTruck && showGenerateButton === order.id && !verification && (
+        <div className="space-y-3 border-t border-slate-800 pt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 5: Generate Dispatch Documents</p>
+          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
+            <p className="text-sm text-emerald-300">✓ Products released and pickers assigned! Generate dispatch documents to print barcode and manifest.</p>
+          </div>
+          <button
+            onClick={() => handleGenerateManifest(order.id)}
+            className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Generate Documents
+          </button>
+        </div>
+      )}
+
 
 
       {/* Documents Section - Show after vehicle registration */}
       {verification && (
         <div className="space-y-2 border-t border-slate-800 pt-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">✓ Dispatch Documents</p>
-          <PrintSheet title="Dispatch Manifest" triggerLabel="📋 Print Manifest">
+          <PrintSheet title="Dispatch Manifest & Handover" triggerLabel="📋 Print Manifest">
             <DispatchManifest
               verification={verification}
               loaderName={currentUser?.name || 'Unknown'}
@@ -601,12 +637,6 @@ function DispatchOrderPanel({
               salesOrderId={verification.salesOrderId}
               customerName={verification.customer}
               dispatchLine={verification.dispatchLine}
-            />
-          </PrintSheet>
-          <PrintSheet title="Handover Verification" triggerLabel="✍️ Print Handover">
-            <HandoverVerificationDocument
-              verification={verification}
-              loaderName={currentUser?.name || 'Unknown'}
             />
           </PrintSheet>
         </div>

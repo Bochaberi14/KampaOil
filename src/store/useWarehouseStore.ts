@@ -134,6 +134,57 @@ function selectFifoPickItems(
   });
 }
 
+// Select FIFO items from bay racks for dispatch picking
+function selectFifoBayPickItems(
+  state: { pallets: Pallet[]; loads: Load[]; bayRacks: any[] },
+  sku: string,
+  qty: number,
+): PickTaskItem[] {
+  // Find all pallets physically in bay racks (have palletId in a slot)
+  const bayPalletMap = new Map<string, { rackId: string; slotIndex: number }>();
+
+  for (const bayRack of state.bayRacks) {
+    if (!bayRack.slots) continue;
+    for (let slotIndex = 0; slotIndex < bayRack.slots.length; slotIndex++) {
+      const slot = bayRack.slots[slotIndex];
+      if (slot.palletId) {
+        // Map pallet to its bay rack location (regardless of status)
+        bayPalletMap.set(slot.palletId, { rackId: bayRack.id, slotIndex });
+      }
+    }
+  }
+
+  // Get loads for bay pallets that match the SKU, maintain FIFO order
+  const candidates = state.loads.filter((l) => {
+    // Must be a pallet physically in a bay rack
+    if (!bayPalletMap.has(l.palletId)) return false;
+    // Must match the SKU
+    if (l.sku !== sku) return false;
+    return true;
+  });
+
+  // Select just enough pallets to fulfill the quantity
+  let remainingQty = qty;
+  const picked: Load[] = [];
+  for (const load of candidates) {
+    if (remainingQty <= 0) break;
+    picked.push(load);
+    remainingQty -= load.quantity;
+  }
+
+  return picked.map((l) => {
+    const loc = bayPalletMap.get(l.palletId)!;
+    return {
+      palletId: l.palletId,
+      sourceRackId: loc.rackId,
+      sourceSlotIndex: loc.slotIndex,
+      sku: l.sku,
+      quantity: l.quantity,
+      picked: false,
+    };
+  });
+}
+
 // Find the first available Picker in a department who has no active task.
 // Returns null if no Picker is available (task will stay unassigned, waiting).
 // Find available picker of specific type/location (e.g., 'storage', 'loading-bay')
@@ -1328,7 +1379,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const tasks: PickTask[] = [];
         for (const a of assignments) {
           const liveState = get();
-          const items = selectFifoPickItems(liveState, so.sku, a.qty);
+          const items = selectFifoBayPickItems(liveState, so.sku, a.qty);
           if (items.length === 0) {
             return err(
               `Ran out of bay stock for SKU ${so.sku} while assigning ${a.pickerId} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
@@ -1814,17 +1865,6 @@ export const useWarehouseStore = create<WarehouseState>()(
           return err(`No vehicle registered yet for ${salesOrderId} — register the vehicle first`);
         }
 
-        const relevantTasks = state.pickTasks.filter((t) => t.salesOrderId === salesOrderId);
-        if (relevantTasks.length === 0) {
-          return err(`No picking has been requested for ${salesOrderId}`);
-        }
-        const incomplete = relevantTasks.filter((t) => t.status !== 'Completed');
-        if (incomplete.length > 0) {
-          return err(
-            `Picking is not complete for ${salesOrderId} — ${incomplete.length} task(s) still in progress`,
-          );
-        }
-
         const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
         if (!truck) return err(`Truck not found`);
 
@@ -1834,22 +1874,55 @@ export const useWarehouseStore = create<WarehouseState>()(
           return ok({ verification: existing });
         }
 
-        const readyPallets = state.pallets.filter(
-          (p) =>
-            (p.status === 'OnBay' || p.status === 'InTransitToTruck') &&
-            state.loads.find((l) => l.palletId === p.id)?.sku === so.sku,
-        );
+        // Find pallets that are either staged for dispatch OR on bay ready to be picked
+        const readyPallets = state.pallets.filter((p) => {
+          const load = state.loads.find((l) => l.palletId === p.id);
+          if (!load || load.sku !== so.sku) return false;
+
+          // Include staged pallets for this truck
+          if (p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine') {
+            return (p.location as any).truckId === so.assignedTruckId;
+          }
+
+          // Include on-bay pallets that haven't been assigned to another truck yet
+          if (p.status === 'OnBay') return true;
+
+          return false;
+        });
+
         if (readyPallets.length === 0) {
-          return err(`No goods are ready to stage for ${salesOrderId}`);
+          return err(`No goods available for ${salesOrderId} — check if products are in bay or being picked`);
         }
 
-        const palletIds = readyPallets.map((p) => p.id);
-        const pickedQty = readyPallets.reduce((sum, p) => {
+        // Only include up to released quantity
+        let remainingQty = so.releasedQty;
+        const selectedPallets = [];
+        for (const p of readyPallets) {
+          if (remainingQty <= 0) break;
+          const load = state.loads.find((l) => l.palletId === p.id);
+          if (load) {
+            selectedPallets.push(p);
+            remainingQty -= load.quantity;
+          }
+        }
+
+        const palletIds = selectedPallets.map((p) => p.id);
+
+        // Only count actually staged (picked) quantity, not all selected pallets
+        const stagedPallets = selectedPallets.filter((p) => p.status === 'StagedForDispatch');
+        const pickedQty = stagedPallets.reduce((sum, p) => {
           const load = state.loads.find((l) => l.palletId === p.id);
           return sum + (load?.quantity ?? 0);
         }, 0);
+
+        // Get pickers from pick tasks for this order
         const pickerUserIds = Array.from(
-          new Set(relevantTasks.map((t) => t.assignedPickerId).filter((id): id is string => !!id)),
+          new Set(
+            state.pickTasks
+              .filter((t) => t.salesOrderId === salesOrderId && t.assignedPickerId)
+              .map((t) => t.assignedPickerId)
+              .filter((id): id is string => !!id),
+          ),
         );
         const allocation = state.dispatchAllocations.find(
           (a) => a.salesOrderId === salesOrderId && a.truckId === truck.id,
@@ -1910,164 +1983,16 @@ export const useWarehouseStore = create<WarehouseState>()(
         const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
         if (!truck) return err(`Truck "${so.assignedTruckId}" not found`);
 
-        const relevantTasks = state.pickTasks.filter((t) => t.salesOrderId === salesOrderId);
-        if (relevantTasks.length === 0) {
-          return err(`No picking has been requested yet for ${salesOrderId}`);
-        }
-        const incomplete = relevantTasks.filter((t) => t.status !== 'Completed');
-        if (incomplete.length > 0) {
-          return err(
-            `Picking is not complete for ${salesOrderId} — ${incomplete.length} task(s) still in progress. Finish picking before staging.`,
-          );
-        }
-
         if (dispatchLineCode !== truck.dispatchLine) {
           return err(`Wrong dispatch line. Please proceed to ${truck.dispatchLine}.`);
         }
-        if (!truckAllowedForOrder(state.dispatchAllocations, truck, so)) {
-          return err(`Truck ${truck.id} is already assigned to a different sales order`);
+
+        const verification = state.dispatchVerifications.find((v) => v.salesOrderId === salesOrderId);
+        if (!verification) {
+          return err(`No goods have been staged yet for ${salesOrderId} — generate dispatch documents first`);
         }
 
-        // Every pallet ready to stage for this SO's product — whichever path
-        // got it there.
-        const readyPallets = state.pallets.filter(
-          (p) =>
-            (p.status === 'OnBay' || p.status === 'InTransitToTruck') &&
-            state.loads.find((l) => l.palletId === p.id)?.sku === so.sku,
-        );
-        if (readyPallets.length === 0) {
-          return err(`No goods are staged and ready for ${salesOrderId} yet`);
-        }
-
-        const palletIds = readyPallets.map((p) => p.id);
-        const pickedQty = readyPallets.reduce((sum, p) => {
-          const load = state.loads.find((l) => l.palletId === p.id);
-          return sum + (load?.quantity ?? 0);
-        }, 0);
-        const pickerUserIds = Array.from(
-          new Set(relevantTasks.map((t) => t.assignedPickerId).filter((id): id is string => !!id)),
-        );
-        const allocation = state.dispatchAllocations.find(
-          (a) => a.salesOrderId === salesOrderId && a.truckId === truck.id,
-        );
-        const hasAllocations = state.dispatchAllocations.some((a) => a.salesOrderId === salesOrderId);
-
-        const now = new Date().toISOString();
-        const newDispatchedQty = so.dispatchedQty + pickedQty;
-        const soFulfilled = newDispatchedQty >= so.qty;
-        const newDispatchedPalletIds = [...so.dispatchedPalletIds, ...palletIds];
-        const dispatchLineLocation = {
-          type: 'DispatchLine' as const,
-          dispatchLine: truck.dispatchLine,
-          truckId: truck.id,
-        };
-
-        set((state) => ({
-          bayRacks: state.bayRacks.map((b) => ({
-            ...b,
-            slots: b.slots.map((s) => (s.palletId && palletIds.includes(s.palletId) ? { ...s, palletId: null } : s)),
-          })),
-          pallets: state.pallets.map((p) =>
-            palletIds.includes(p.id) ? { ...p, status: 'StagedForDispatch', location: dispatchLineLocation } : p,
-          ),
-          loads: state.loads.map((l) =>
-            palletIds.includes(l.palletId) ? { ...l, status: 'Dispatched' } : l,
-          ),
-          trucks: state.trucks.map((t) => (t.id === truck.id ? { ...t, status: 'Staged', salesOrderId } : t)),
-          salesOrders: state.salesOrders.map((s) =>
-            s.id === salesOrderId
-              ? {
-                  ...s,
-                  dispatchedQty: newDispatchedQty,
-                  status: soFulfilled ? 'Fulfilled' : 'Picking',
-                  assignedTruckId: hasAllocations ? s.assignedTruckId : truck.id,
-                  dispatchedPalletIds: newDispatchedPalletIds,
-                }
-              : s,
-          ),
-          dispatchAllocations: allocation
-            ? state.dispatchAllocations.map((a) =>
-                a.id === allocation.id
-                  ? {
-                      ...a,
-                      dispatchedQty: a.dispatchedQty + pickedQty,
-                      dispatchedPalletIds: [...a.dispatchedPalletIds, ...palletIds],
-                      status: a.dispatchedQty + pickedQty >= a.plannedQty ? 'Fulfilled' : 'Planned',
-                    }
-                  : a,
-              )
-            : state.dispatchAllocations,
-          movements: [
-            ...state.movements,
-            ...palletIds.map((palletId) => ({
-              id: generateMovementId(),
-              palletId,
-              from: 'Loading bay / dispatch area',
-              to: `${truck.dispatchLine} (${truck.plate})`,
-              timestamp: now,
-              operatorId,
-            })),
-          ],
-        }));
-
-        const manifestId = generateManifestId();
-        const manifest: Manifest = {
-          id: manifestId,
-          salesOrderId,
-          truckId: truck.id,
-          customer: so.customer,
-          productName: so.productName,
-          totalQty: pickedQty,
-          palletIds,
-          dispatchedAt: now,
-          sapStatus: 'Syncing',
-          sapDocNumber: null,
-        };
-        const verification: DispatchVerification = {
-          id: generateVerificationId(),
-          salesOrderId,
-          truckId: truck.id,
-          vehicleBarcode: truck.dispatchBarcode ?? '',
-          dispatchLine: truck.dispatchLine,
-          customer: so.customer,
-          products: [
-            { sku: so.sku, productName: so.productName, orderedQty: so.qty, releasedQty: so.releasedQty, pickedQty },
-          ],
-          palletIds,
-          loaderUserId: allocation?.createdByUserId ?? null,
-          pickerUserIds,
-          stagedAt: now,
-          stagedByUserId: operatorId,
-          vehicleVerifiedAt: null,
-          vehicleVerifiedByUserId: null,
-          driverName: null,
-          driverSignedAt: null,
-          loaderSignedByUserId: null,
-          loaderSignedAt: null,
-          status: 'AwaitingVerification',
-        };
-        set((state) => ({
-          manifests: [...state.manifests, manifest],
-          dispatchVerifications: [...state.dispatchVerifications, verification],
-        }));
-        get().pushToast(
-          `${pickedQty.toLocaleString()} units of ${so.productName} staged at ${truck.dispatchLine} — awaiting the Loader's vehicle verification`,
-          'success',
-        );
-        postDispatchConfirmation({
-          salesOrderId,
-          truckId: truck.id,
-          palletIds,
-          qty: pickedQty,
-          dispatchedAt: now,
-        }).then((res) => {
-          set((state) => ({
-            manifests: state.manifests.map((m) =>
-              m.id === manifestId ? { ...m, sapStatus: 'Synced', sapDocNumber: res.sapDocNumber } : m,
-            ),
-          }));
-          get().pushToast(`Staging synced to SAP — ${res.sapDocNumber}`, 'success');
-        });
+        get().pushToast(`✓ Dispatch line verified. Ready to scan vehicle barcode.`, 'success');
         return ok({ verification });
       },
 

@@ -34,6 +34,7 @@ export function DispatchPage() {
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
   const [selectedSOId, setSelectedSOId] = useState<string | null>(null);
+  const [dispatchLineScanned, setDispatchLineScanned] = useState(false);
   const [dispatchPickingState, setDispatchPickingState] = useState<{
     taskId: string | null;
     step: 'task-select' | 'bay-rack' | 'pallet' | 'scan-line' | 'scan-vehicle';
@@ -189,16 +190,39 @@ export function DispatchPage() {
   }
 
   function handleScanLine(lineCode: string) {
-    if (!selectedSO || !currentUser) return;
+    if (!selectedSO || !currentUser || !assignedTruck) return;
+
+    // Verify correct dispatch line
+    if (lineCode !== assignedTruck.dispatchLine) {
+      pushToast(`❌ Wrong line! Expected ${assignedTruck.dispatchLine}, scanned ${lineCode}`, 'error');
+      return;
+    }
+
+    pushToast(`✓ Dispatch line confirmed — now scan vehicle barcode`, 'success');
+    setDispatchLineScanned(true);
+  }
+
+  function handleScanVehicle(vehicleCode: string) {
+    if (!selectedSO || !currentUser || !assignedTruck) return;
+
+    // Verify correct vehicle
+    if (vehicleCode !== assignedTruck.plate && vehicleCode !== assignedTruck.id) {
+      pushToast(`❌ Wrong vehicle! Expected ${assignedTruck.plate}, scanned ${vehicleCode}`, 'error');
+      return;
+    }
+
     const result = scanDispatchLine({
       salesOrderId: selectedSO.id,
-      dispatchLineCode: lineCode,
+      dispatchLineCode: assignedTruck.dispatchLine,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
       pushToast(result.error, 'error');
       return;
     }
+
+    pushToast(`✓ Dispatch verified! Order ready for completion.`, 'success');
+    setDispatchLineScanned(false);
   }
 
   return (
@@ -451,19 +475,34 @@ export function DispatchPage() {
             </p>
           )}
           {selectedSO && can(currentUser?.role, 'execute:scan') && assignedTruck && pickingComplete && (
-            <>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                <span className={`rounded-full px-2 py-1 ${dispatchLineScanned ? 'bg-emerald-500/15 text-emerald-300' : 'bg-indigo-500/15 text-indigo-300'}`}>
+                  1. Scan dispatch line
+                </span>
+                <span className={`rounded-full px-2 py-1 ${dispatchLineScanned ? 'bg-indigo-500/15 text-indigo-300' : 'bg-slate-800 text-slate-500'}`}>
+                  2. Scan vehicle
+                </span>
+              </div>
               <p className="text-xs text-slate-400">
-                All picking is complete — move the goods to {assignedTruck.dispatchLine} and scan it to
-                finish. The pallet itself stays behind; only the product moves on. The Loader takes
-                over from here (vehicle verification and signing).
+                All picking is complete — scan {assignedTruck.dispatchLine} and vehicle {assignedTruck.plate} to verify and complete.
               </p>
-              <ScanInput
-                label="Scan the dispatch line"
-                placeholder="e.g. LINE 001"
-                onScan={handleScanLine}
-                suggestions={[assignedTruck.dispatchLine]}
-              />
-            </>
+              {!dispatchLineScanned ? (
+                <ScanInput
+                  label="Step 1: Scan the dispatch line"
+                  placeholder={`e.g. ${assignedTruck.dispatchLine}`}
+                  onScan={handleScanLine}
+                  suggestions={[assignedTruck.dispatchLine]}
+                />
+              ) : (
+                <ScanInput
+                  label="Step 2: Scan vehicle barcode or plate"
+                  placeholder={`e.g. ${assignedTruck.plate}`}
+                  onScan={handleScanVehicle}
+                  suggestions={[assignedTruck.plate, assignedTruck.id]}
+                />
+              )}
+            </div>
           )}
           {selectedSO?.status === 'Fulfilled' && (
             <p className="text-sm text-emerald-400">This sales order has been fully staged for dispatch.</p>

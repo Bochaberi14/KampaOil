@@ -58,7 +58,7 @@ export const STORAGE_ZONES: Zone[] = [
 ];
 
 // STORAGE SHELVES: Each zone has 2 shelves (S-01, S-02) with 3 racks each
-// OVERFLOW has 3 shelves with 4 racks each for excess production
+// OVERFLOW also has 2 shelves with 3 racks each (matches other zones)
 export const STORAGE_SHELVES: Shelf[] = [
   // BIN-A (Rina 1L) - 2 shelves
   createShelf('BIN-A-S-01', 'BIN-A', '01', ['BIN-A-S-01-R-01', 'BIN-A-S-01-R-02', 'BIN-A-S-01-R-03']),
@@ -239,21 +239,14 @@ const createStorageRacks = (): Rack[] => {
     'BIN-C-S-02-R-01': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
     'BIN-C-S-02-R-02': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
     'BIN-C-S-02-R-03': { zoneId: 'BIN-C', shelfId: 'BIN-C-S-02' },
-    // OVERFLOW - Shelf 1 (4 racks)
+    // OVERFLOW - Shelf 1 (3 racks)
     'OVERFLOW-S-01-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
     'OVERFLOW-S-01-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
     'OVERFLOW-S-01-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
-    'OVERFLOW-S-01-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-01' },
-    // OVERFLOW - Shelf 2 (4 racks)
+    // OVERFLOW - Shelf 2 (3 racks)
     'OVERFLOW-S-02-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
     'OVERFLOW-S-02-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
     'OVERFLOW-S-02-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
-    'OVERFLOW-S-02-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-02' },
-    // OVERFLOW - Shelf 3 (4 racks)
-    'OVERFLOW-S-03-R-01': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
-    'OVERFLOW-S-03-R-02': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
-    'OVERFLOW-S-03-R-03': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
-    'OVERFLOW-S-03-R-04': { zoneId: 'OVERFLOW', shelfId: 'OVERFLOW-S-03' },
   };
 
   return Object.entries(rackMap).map(([id, { zoneId, shelfId }]) => ({

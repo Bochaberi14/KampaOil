@@ -8,7 +8,7 @@ import { PRODUCTS } from '../data/products';
 import { LOADING_BAY_ZONES, LOADING_BAY_SHELVES } from '../data/seed';
 
 type WizardStep = 'bay-arriving' | 'bay-staging';
-type DispatchStep = 'scan-pallet' | 'scan-destination';
+type DispatchStep = 'scan-pallet';
 
 export function LoadingBayPage() {
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
@@ -21,6 +21,7 @@ export function LoadingBayPage() {
   const requestStockFromStorageToLoadingBay = useWarehouseStore((s) => s.requestStockFromStorageToLoadingBay);
   const scanPalletLeavingStorage = useWarehouseStore((s) => s.scanPalletLeavingStorage);
   const placePalletInBay = useWarehouseStore((s) => s.placePalletInBay);
+  const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
@@ -36,11 +37,13 @@ export function LoadingBayPage() {
     taskId: string | null;
     palletId: string | null;
     dispatchDestination: string | null;
+    bayRackId: string | null;
   }>({
     step: 'scan-pallet',
     taskId: null,
     palletId: null,
     dispatchDestination: null,
+    bayRackId: null,
   });
 
   const [stagingRequest, setStagingRequest] = useState({ sku: '', qty: '' });
@@ -191,30 +194,76 @@ export function LoadingBayPage() {
   }
 
   function cancelDispatch() {
-    setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null });
+    setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null, bayRackId: null });
   }
 
-  function handleScanPallet(palletId: string) {
+  function handleScanBayRackForDispatch(bayRackId: string) {
     if (!dispatchWizard.taskId || !currentUser) return;
     const task = pickTasks.find((t) => t.id === dispatchWizard.taskId);
     if (!task) return;
 
-    // Verify this pallet is in this dispatch task
-    const item = task.items.find((i) => i.palletId === palletId && !i.picked);
-    if (!item) {
-      pushToast(`❌ Pallet ${palletId} not in this dispatch task`, 'error');
+    const nextItem = task.items.find((i) => !i.picked);
+    if (!nextItem) {
+      pushToast(`❌ All pallets in this task already dispatched`, 'error');
       return;
     }
 
-    setDispatchWizard({ ...dispatchWizard, step: 'scan-destination', palletId });
-    pushToast(`✓ Pallet ${palletId} ready — scan dispatch line`, 'success');
+    // Check if sourceRackId is set
+    if (!nextItem.sourceRackId) {
+      pushToast(
+        `❌ Pallet ${nextItem.palletId} has no assigned bay rack. Contact supervisor.`,
+        'error',
+      );
+      return;
+    }
+
+    // Verify scanned rack matches the system-recommended FIFO rack
+    if (bayRackId !== nextItem.sourceRackId) {
+      pushToast(
+        `❌ Wrong rack! System recommends ${nextItem.sourceRackId} for pallet ${nextItem.palletId}. Scan the correct rack.`,
+        'error',
+      );
+      return;
+    }
+
+    pushToast(`✓ Correct rack ${bayRackId} scanned — now scan pallet ${nextItem.palletId}`, 'success');
+    setDispatchWizard({ ...dispatchWizard, step: 'scan-pallet', bayRackId });
   }
 
-  function handleScanDispatchLine(destination: string) {
-    if (!dispatchWizard.taskId || !dispatchWizard.palletId || !currentUser) return;
+  function handleScanPallet(palletId: string) {
+    if (!dispatchWizard.taskId || !currentUser || !dispatchWizard.bayRackId) return;
+    const task = pickTasks.find((t) => t.id === dispatchWizard.taskId);
+    if (!task) return;
 
-    pushToast(`✓ Pallet ${dispatchWizard.palletId} moved to ${destination}`, 'success');
-    setDispatchWizard({ step: 'scan-pallet', taskId: dispatchWizard.taskId, palletId: null, dispatchDestination: null });
+    // Verify this pallet is in this dispatch task and not already picked
+    const item = task.items.find((i) => i.palletId === palletId && !i.picked);
+    if (!item) {
+      pushToast(`❌ Pallet ${palletId} not in this dispatch task or already dispatched`, 'error');
+      return;
+    }
+
+    // Verify the pallet is actually in the scanned bay rack
+    const palletSlot = bayRacks.find(r => r.id === dispatchWizard.bayRackId)?.slots.find(s => s.palletId === palletId);
+    if (!palletSlot) {
+      pushToast(`❌ Pallet ${palletId} not found in rack ${dispatchWizard.bayRackId}`, 'error');
+      return;
+    }
+
+    // Mark pallet as dispatched
+    const result = executeDispatchPicking({
+      pickTaskId: dispatchWizard.taskId,
+      bayRackId: dispatchWizard.bayRackId,
+      palletIds: [palletId],
+      operatorId: currentUser.id,
+    });
+
+    if (!result.ok) {
+      pushToast(result.error, 'error');
+      return;
+    }
+
+    pushToast(`✓ Pallet ${palletId} ready for dispatch — continue to next pallet or finish`, 'success');
+    setDispatchWizard({ step: 'scan-pallet', taskId: dispatchWizard.taskId, palletId: null, dispatchDestination: null, bayRackId: null });
   }
 
 
@@ -325,9 +374,14 @@ export function LoadingBayPage() {
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quantity (units)</label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={stagingRequest.qty}
-                  onChange={(e) => setStagingRequest((s) => ({ ...s, qty: e.target.value }))}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setStagingRequest((s) => ({ ...s, qty: val }));
+                  }}
                   placeholder="e.g. 500"
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 placeholder-slate-600"
                 />
@@ -408,11 +462,11 @@ export function LoadingBayPage() {
 
       {/* Dispatch workflow - releasing pallets to vehicles */}
       {isLoadingBayPicker && (() => {
-        const dispatchTasks = pickTasks.filter((t) => t.assignedPickerId === currentUser?.id && t.status === 'Accepted');
+        const dispatchTasks = pickTasks.filter((t) => t.assignedPickerId === currentUser?.id && t.status === 'Accepted' && t.origin === 'Dispatch');
         const activeDispatch = dispatchWizard.taskId && dispatchTasks.find((t) => t.id === dispatchWizard.taskId);
 
         if (dispatchWizard.taskId && !activeDispatch) {
-          setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null });
+          setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null, bayRackId: null });
         }
 
         if (dispatchTasks.length === 0 && !activeDispatch) return null;
@@ -420,59 +474,91 @@ export function LoadingBayPage() {
         return (
           <div className="space-y-4 rounded-2xl border border-purple-800 bg-purple-900/20 p-6">
             <h2 className="text-lg font-semibold text-purple-200">📦 Dispatch Workflow</h2>
+            <p className="text-xs text-purple-300">
+              Loading Bay Picker: Scan racks and pallets leaving the loading bay to dispatch line
+            </p>
 
             {activeDispatch ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                  <StepDot active={dispatchWizard.step === 'scan-pallet'} label="1. Scan pallet from bay" />
-                  <StepDot active={dispatchWizard.step === 'scan-destination'} label="2. Scan dispatch line" />
+                  <StepDot active={dispatchWizard.step === 'scan-pallet' && !dispatchWizard.bayRackId} label="1. Scan bay rack" />
+                  <StepDot active={dispatchWizard.step === 'scan-pallet' && !!dispatchWizard.bayRackId} label="2. Scan pallet" />
                 </div>
 
-                {dispatchWizard.step === 'scan-pallet' && (
-                  <>
-                    <p className="text-sm text-purple-200">Take pallet from bay and move to dispatch</p>
-                    <ScanInput
-                      label="Scan pallet barcode"
-                      placeholder="e.g. PLT-001"
-                      onScan={handleScanPallet}
-                      suggestions={activeDispatch.items.filter((i) => !i.picked).map((i) => i.palletId)}
-                    />
-                    <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
-                      Finish dispatch
-                    </button>
-                  </>
-                )}
+                {dispatchWizard.step === 'scan-pallet' && !dispatchWizard.bayRackId && (() => {
+                  const nextItem = activeDispatch?.items.find((i) => !i.picked);
+                  const expectedRackId = nextItem?.sourceRackId;
+                  return (
+                    <>
+                      <p className="text-sm text-purple-200">
+                        Pallet <span className="font-mono font-semibold text-purple-100">{nextItem?.palletId}</span> — scan the bay rack location
+                      </p>
+                      {expectedRackId ? (
+                        <div className="rounded-lg bg-purple-800/30 p-3 mb-3">
+                          <p className="text-xs font-semibold text-purple-300 mb-2">System recommends (FIFO):</p>
+                          <p className="text-sm text-purple-100 font-mono">{expectedRackId}</p>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 mb-3">
+                          <p className="text-xs text-red-300">Pallet location not assigned</p>
+                        </div>
+                      )}
+                      <ScanInput
+                        label="Scan bay rack barcode"
+                        placeholder="e.g. BIN-A-BAY-S-01-R-01"
+                        onScan={handleScanBayRackForDispatch}
+                        suggestions={expectedRackId ? [expectedRackId] : []}
+                      />
+                      <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
+                        Cancel
+                      </button>
+                    </>
+                  );
+                })()}
 
-                {dispatchWizard.step === 'scan-destination' && (
-                  <>
-                    <p className="text-sm text-purple-200">
-                      Pallet <span className="font-mono font-semibold">{dispatchWizard.palletId}</span> — scan dispatch line
-                    </p>
-                    <ScanInput
-                      label="Scan dispatch line barcode"
-                      placeholder="e.g. DISP-01"
-                      onScan={handleScanDispatchLine}
-                      suggestions={['DISP-01', 'DISP-02', 'DISP-03']}
-                    />
-                    <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
-                      Cancel
-                    </button>
-                  </>
-                )}
+                {dispatchWizard.step === 'scan-pallet' && dispatchWizard.bayRackId && (() => {
+                  const nextUnpicked = activeDispatch?.items.find((i) => !i.picked);
+                  return (
+                    <>
+                      <p className="text-sm text-purple-200">
+                        Bay Rack <span className="font-mono font-semibold text-purple-100">{dispatchWizard.bayRackId}</span> — scan pallet
+                      </p>
+                      <ScanInput
+                        label="Scan pallet barcode"
+                        placeholder="e.g. PLT-001"
+                        onScan={handleScanPallet}
+                        suggestions={nextUnpicked ? [nextUnpicked.palletId] : []}
+                      />
+                      <button
+                        onClick={() => setDispatchWizard({ ...dispatchWizard, step: 'scan-pallet', bayRackId: null })}
+                        className="text-xs text-purple-400 hover:text-purple-300"
+                      >
+                        Back to rack selection
+                      </button>
+                    </>
+                  );
+                })()}
+
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-sm text-purple-300">Active dispatch tasks:</p>
-                {dispatchTasks.map((task) => (
-                  <button
-                    key={task.id}
-                    onClick={() => setDispatchWizard({ step: 'scan-pallet', taskId: task.id, palletId: null, dispatchDestination: null })}
-                    className="block w-full rounded-lg bg-purple-800/30 px-3 py-2 text-left text-sm hover:bg-purple-800/50"
-                  >
-                    <p className="font-mono font-semibold text-purple-200">{task.id}</p>
-                    <p className="text-xs text-purple-400">{task.items.length} pallet(s) to dispatch</p>
-                  </button>
-                ))}
+                <p className="text-sm text-purple-300">Your dispatch picking tasks:</p>
+                {dispatchTasks.length === 0 ? (
+                  <p className="text-xs text-purple-400">No active dispatch picking tasks assigned to you.</p>
+                ) : (
+                  dispatchTasks.map((task) => (
+                    <button
+                      key={task.id}
+                      onClick={() => setDispatchWizard({ step: 'scan-pallet', taskId: task.id, palletId: null, dispatchDestination: null, bayRackId: null })}
+                      className="block w-full rounded-lg bg-purple-800/30 px-3 py-2 text-left text-sm hover:bg-purple-800/50"
+                    >
+                      <p className="font-mono font-semibold text-purple-200">{task.id}</p>
+                      <p className="text-xs text-purple-400">
+                        {task.items.filter(i => !i.picked).length}/{task.items.length} pallet(s) remaining
+                      </p>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
