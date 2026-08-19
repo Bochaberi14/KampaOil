@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { PRODUCTS } from '../data/products';
 import { DEPARTMENTS } from '../data/seed';
-import { canViewReturn } from '../rbac';
+import { canViewReturn, can } from '../rbac';
 import type { Department } from '../types/domain';
 
 const MAX_PHOTO_WIDTH = 800;
@@ -124,9 +124,12 @@ export function ReturnsPage() {
     !!selectedProduct && Number(qty) > 0 && !!department && remark.trim().length > 0 && !processingPhoto;
 
   const visibleReturns = customerReturns.filter((r) => canViewReturn(currentUser ?? undefined, r));
+  const canLogReturn = can(currentUser?.role, 'report:return');
+  const canDecideReturn = can(currentUser?.role, 'decide:return');
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {canLogReturn ? (
       <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <div>
           <h1 className="text-xl font-bold text-white">Log a customer return</h1>
@@ -211,6 +214,16 @@ export function ReturnsPage() {
           </button>
         </div>
       </div>
+      ) : (
+      <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div>
+          <h1 className="text-xl font-bold text-white">Customer Returns</h1>
+          <p className="text-sm text-slate-400">
+            View logged customer returns {canDecideReturn ? '— you can review and decide' : '— view only'}
+          </p>
+        </div>
+      </div>
+      )}
 
       <div className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -252,6 +265,13 @@ export function ReturnsPage() {
                   </div>
                   <div className="mt-0.5 text-xs text-slate-500">{new Date(r.reportedAt).toLocaleString()}</div>
                   <p className="mt-1 text-xs text-slate-400">{r.remark}</p>
+                  {r.status === 'Logged' && (
+                    <div className="mt-2 rounded-lg bg-amber-500/10 px-2 py-1 border border-amber-500/20">
+                      <p className="text-xs text-amber-200">
+                        ⏳ Awaiting QA review
+                      </p>
+                    </div>
+                  )}
                   {r.decision && (
                     <div className="mt-2 rounded-lg bg-slate-800/50 px-2 py-1">
                       <p className="text-xs text-slate-300">
@@ -318,7 +338,7 @@ export function ReturnsPage() {
                 </div>
               )}
 
-              {r.status === 'Logged' && !reviewingReturnId && (
+              {r.status === 'Logged' && !reviewingReturnId && can(currentUser?.role, 'decide:return') && (
                 <div className="border-t border-slate-800 pt-2">
                   <button
                     onClick={() => setReviewingReturnId(r.id)}

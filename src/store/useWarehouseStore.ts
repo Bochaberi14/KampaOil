@@ -2549,8 +2549,8 @@ export const useWarehouseStore = create<WarehouseState>()(
 
       reviewAndDecideReturn: ({ returnId, decision, operatorId }) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'approve:hold')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot review returns — requires Manager, HOD, or Director`);
+        if (!can(state.currentUser?.role, 'decide:return')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot review returns — requires QA`);
         }
         const customerReturn = state.customerReturns.find((r) => r.id === returnId);
         if (!customerReturn) return err(`Return "${returnId}" not found`);

@@ -23,6 +23,7 @@ export type Permission =
   | 'flag:hold'
   | 'plan:dispatch'
   | 'report:return'
+  | 'decide:return'
   | 'admin:scanner-config';
 
 const SUPERVISOR_PERMISSIONS: Permission[] = [
@@ -43,7 +44,7 @@ const SUPERVISOR_PERMISSIONS: Permission[] = [
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // Director and HOD get everything Manager does, plus returns visibility —
   // Manager is deliberately NOT a returns recipient (only Department HOD,
-  // Factory Manager, Sales Manager, and Director are).
+  // Sales Manager, and Director can view returns; QA decides on them).
   Director: [...SUPERVISOR_PERMISSIONS, 'view:returns', 'view:security', 'admin:scanner-config'],
   Manager: SUPERVISOR_PERMISSIONS,
   HOD: [...SUPERVISOR_PERMISSIONS, 'view:returns', 'admin:scanner-config'],
@@ -71,7 +72,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // driver — there's no separate Clerk step in this flow.
   Loader: ['view:dashboard', 'view:loader', 'plan:dispatch', 'sign:dispatch', 'view:barcodes'],
   // QA owns Hold & Recall approvals specifically, not direct-dispatch approval
-  // or supervisor sign-off.
+  // or supervisor sign-off. QA also reviews and decides on customer returns.
   QA: [
     'view:dashboard',
     'view:hold',
@@ -80,6 +81,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'approve:hold',
     'approve:recall',
     'view:barcodes',
+    'view:returns',
+    'decide:return',
   ],
   'Customer Return Clerk': ['view:dashboard', 'view:returns', 'report:return', 'view:barcodes'],
   'Sales Manager': ['view:dashboard', 'view:returns'],
@@ -92,7 +95,7 @@ export const ROLE_BLURB: Record<Role, string> = {
   Picker: 'Scan & move pallets — production, storage, loading bay, dispatch',
   Clerk: 'Inventory reports & discrepancy reporting — can flag a product for hold, not approve one',
   Loader: 'Coordinates dispatch end-to-end — releases orders, assigns pickers, registers & verifies the vehicle, signs the handover',
-  QA: 'Quality assurance — approve/reject holds, decide recall outcomes',
+  QA: 'Quality assurance — approve/reject holds, decide recall outcomes, review & decide customer returns',
   'Customer Return Clerk': 'Log customer returns — product, quantity, defect photo & remarks',
   'Sales Manager': 'Sales-side visibility into returns for customer/order reconciliation',
 };
