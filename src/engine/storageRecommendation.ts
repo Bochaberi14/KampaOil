@@ -35,11 +35,11 @@ export function recommendStorageLocation(
     // Count already racked pallets
     const rackedCount = rack.slots.filter((s) => s.palletId).length;
 
-    // Count in-transit pallets assigned to this rack
+    // Count in-transit pallets assigned to this rack (only InTransitToStorage, not Loaded which are still at production)
     const inTransitCount = pallets
       ? pallets.filter(
           (p) =>
-            (p.status === 'InTransitToStorage' || p.status === 'Loaded') &&
+            p.status === 'InTransitToStorage' &&
             p.recommendedStorageLocation &&
             p.recommendedStorageLocation.rackId === rack.id,
         ).length
@@ -66,7 +66,7 @@ export function recommendStorageLocation(
     const inTransitCount = pallets
       ? pallets.filter(
           (p) =>
-            (p.status === 'InTransitToStorage' || p.status === 'Loaded') &&
+            p.status === 'InTransitToStorage' &&
             p.recommendedStorageLocation &&
             p.recommendedStorageLocation.rackId === rack.id,
         ).length

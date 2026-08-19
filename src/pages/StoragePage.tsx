@@ -41,15 +41,28 @@ export function StoragePage() {
 
 
 
-  const loadedPallets = pallets.filter((p) => p.status === 'Loaded').map((p) => p.id);
+  const loadedPallets = pallets
+    .filter((p) => p.status === 'Loaded' && p.location.type !== 'Line')
+    .map((p) => p.id);
   const inTransitPallets = pallets.filter((p) => p.status === 'InTransitToStorage').map((p) => p.id);
 
   function handleScanPalletArriving(palletId: string) {
     if (!currentUser) return;
     const pallet = pallets.find((p) => p.id === palletId);
 
+    if (!pallet) {
+      pushToast(`❌ Pallet ${palletId} not found`, 'error');
+      return;
+    }
+
+    // Reject pallets still at production
+    if (pallet.location.type === 'Line') {
+      pushToast(`❌ Pallet ${palletId} is still at production — cannot scan here`, 'error');
+      return;
+    }
+
     // Pallet already in transit — resume at rack placement step
-    if (pallet?.status === 'InTransitToStorage') {
+    if (pallet.status === 'InTransitToStorage') {
       setWizard({ step: 'rack-placement', palletId });
       return;
     }

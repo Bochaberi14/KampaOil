@@ -74,7 +74,7 @@ import {
 } from '../engine/ids';
 import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
 import { recommendStorageLocation } from '../engine/storageRecommendation';
-import { can } from '../rbac';
+import { can, getPickerType } from '../rbac';
 
 const RECALL_STAGE_ORDER: RecallStageName[] = ['Inspection', 'Repacking', 'Relabelling', 'QA'];
 
@@ -713,6 +713,9 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
         }
+        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+          return err('❌ Only production pickers can scan lines');
+        }
         const line = state.lines.find((l) => l.id === lineId);
         if (!line) return err(`Line "${lineId}" not found`);
         return ok({ line });
@@ -726,6 +729,9 @@ export const useWarehouseStore = create<WarehouseState>()(
         const state = get();
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+          return err('❌ Only production pickers can scan products for production');
         }
         const line = state.lines.find((l) => l.id === lineId);
         if (!line) return err(`Line "${lineId}" not found`);
@@ -749,6 +755,9 @@ export const useWarehouseStore = create<WarehouseState>()(
         const state = get();
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+          return err('❌ Only production pickers can scan pallets for production loading');
         }
         const pallet = state.pallets.find((p) => p.id === palletId);
         if (!pallet) return err(`Pallet "${palletId}" not found`);
