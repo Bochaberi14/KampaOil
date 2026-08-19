@@ -158,6 +158,10 @@ export interface Pallet {
     shelfId: string;
     rackId: string;
   };
+  // Loading bay destination recommended when pallet leaves storage
+  recommendedBayLocation?: {
+    rackId: string;
+  };
 }
 
 // A line has no fixed product — it runs whatever the operator scans onto it

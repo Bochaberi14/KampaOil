@@ -18,6 +18,7 @@ import { BarcodesPage } from './pages/BarcodesPage';
 import { ZoneInventoryPage } from './pages/ZoneInventoryPage';
 import { SecurityDashboardPage } from './pages/SecurityDashboardPage';
 import { SecurityDemoPage } from './pages/SecurityDemoPage';
+import { ScannerManagementPage } from './pages/ScannerManagementPage';
 
 function App() {
   return (
@@ -143,6 +144,14 @@ function App() {
               element={
                 <RoleRoute permission="view:security">
                   <SecurityDemoPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/scanner-management"
+              element={
+                <RoleRoute permission="admin:scanner-config">
+                  <ScannerManagementPage />
                 </RoleRoute>
               }
             />

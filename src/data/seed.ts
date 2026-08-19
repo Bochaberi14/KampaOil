@@ -100,22 +100,25 @@ export const LOADING_BAY_SHELVES: Shelf[] = [
 ];
 
 export const USERS: User[] = [
-  // Oil & Refinery Pickers
-  { id: 'op1', name: 'Alex Mwangi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick1', name: 'Sam Otieno', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick2', name: 'Moses Kipchoge', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick3', name: 'Amara Koech', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick4', name: 'Rashid Hassan', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'pick5', name: 'Zainab Omondi', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  // Oil & Refinery Production Pickers (3)
+  { id: 'pick-prod-1', name: 'Production Picker 1', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick-prod-2', name: 'Production Picker 2', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick-prod-3', name: 'Production Picker 3', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  // Oil & Refinery Storage Pickers (2)
+  { id: 'pick-stor-1', name: 'Storage Picker 1', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick-stor-2', name: 'Storage Picker 2', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  // Oil & Refinery Loading Bay Pickers (2)
+  { id: 'pick-bay-1', name: 'Loading Bay Picker 1', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'pick-bay-2', name: 'Loading Bay Picker 2', role: 'Picker', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
   // Management
-  { id: 'mgr1', name: 'Jordan Wanjiru', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'hod1', name: 'Priya Kimani', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'dir1', name: 'Winnie Bochaberi', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'clerk1', name: 'Grace Achieng', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'load1', name: 'Brian Kiptoo', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'qa1', name: 'Fatuma Noor', role: 'QA', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'ret1', name: 'Wanjiku Njeri', role: 'Customer Return Clerk', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'salesmgr1', name: 'Esther Njoroge', role: 'Sales Manager', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'mgr1', name: 'Manager', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'hod1', name: 'HOD', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'dir1', name: 'Director', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'clerk1', name: 'Clerk', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'load1', name: 'Loader', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'qa1', name: 'QA', role: 'QA', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'ret1', name: 'Returns Clerk', role: 'Customer Return Clerk', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'salesmgr1', name: 'Sales Manager', role: 'Sales Manager', mfaEnabled: true, loginAttempts: 0 },
 ];
 
 // The only valid "Rework" recall destination — a dedicated line for

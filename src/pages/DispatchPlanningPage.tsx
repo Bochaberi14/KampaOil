@@ -4,6 +4,7 @@ import { PrintSheet } from '../components/PrintSheet';
 import { DispatchManifest } from '../components/DispatchManifest';
 import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
 import { HandoverVerificationDocument } from '../components/HandoverVerificationDocument';
+import { filterPickersByType } from '../rbac';
 import { USERS } from '../data/seed';
 import type { SalesOrder } from '../types/domain';
 
@@ -60,9 +61,11 @@ export function DispatchPlanningPage() {
   const currentOrders = ordersByBucket[activeTab];
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
   const remainingToRelease = selectedSO ? selectedSO.qty - selectedSO.releasedQty : 0;
-  const availablePickers = USERS.filter((u) => {
-    if (u.role !== 'Picker') return false;
-    if (u.department !== 'Oil & Refinery') return false;
+
+  // Only Loading Bay Pickers can be assigned for dispatch picking
+  const allDispatchPickers = USERS.filter((u) => u.role === 'Picker' && u.department === 'Oil & Refinery');
+  const loadingBayPickers = filterPickersByType(allDispatchPickers, 'loading-bay');
+  const availablePickers = loadingBayPickers.filter((u) => {
     const hasOngoingTask = pickTasks.some((t) => t.assignedPickerId === u.id && t.status === 'Accepted');
     return !hasOngoingTask;
   });

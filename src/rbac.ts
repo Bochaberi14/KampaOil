@@ -138,3 +138,18 @@ export function canAccessDepartment(user: User | undefined | null, targetDepartm
   // Director, Manager, and other roles can access all departments
   return true;
 }
+
+// Determine picker type/location based on their ID
+export type PickerType = 'production' | 'storage' | 'loading-bay' | 'unknown';
+
+export function getPickerType(pickerId: string): PickerType {
+  if (pickerId.startsWith('pick-prod-')) return 'production';
+  if (pickerId.startsWith('pick-stor-')) return 'storage';
+  if (pickerId.startsWith('pick-bay-')) return 'loading-bay';
+  return 'unknown';
+}
+
+// Filter pickers by location/type
+export function filterPickersByType(pickers: User[], type: PickerType): User[] {
+  return pickers.filter((p) => getPickerType(p.id) === type);
+}

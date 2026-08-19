@@ -136,12 +136,18 @@ function selectFifoPickItems(
 
 // Find the first available Picker in a department who has no active task.
 // Returns null if no Picker is available (task will stay unassigned, waiting).
-function findAvailablePickerForDepartment(
+// Find available picker of specific type/location (e.g., 'storage', 'loading-bay')
+function findAvailablePickerByType(
   state: { pickTasks: PickTask[]; currentUser: User | null },
   department: string | undefined,
+  pickerType: 'storage' | 'loading-bay',
 ): User | null {
   if (!department) return null;
-  const pickerCandidates = USERS.filter((u) => u.role === 'Picker' && u.department === department);
+  const pickerCandidates = USERS.filter((u) => {
+    if (u.role !== 'Picker' || u.department !== department) return false;
+    const typeMatch = pickerType === 'storage' ? u.id.startsWith('pick-stor-') : u.id.startsWith('pick-bay-');
+    return typeMatch;
+  });
   for (const picker of pickerCandidates) {
     const hasActiveTask = state.pickTasks.some(
       (t) => t.assignedPickerId === picker.id && t.status === 'Accepted',
@@ -297,6 +303,11 @@ interface WarehouseState {
     bayRackId: string;
     operatorId: string;
   }) => Result<{ completed: boolean }>;
+  placePalletInBay: (args: {
+    palletId: string;
+    bayRackId: string;
+    operatorId: string;
+  }) => Result;
 
   // Phase 2 — Dispatch picking (bay → dispatch line)
   assignDispatchPickingTasks: (args: {
@@ -754,8 +765,8 @@ export const useWarehouseStore = create<WarehouseState>()(
         const existingBatch = get().batches.find((b) => b.id === batchId);
         const loadId = generateLoadId();
 
-        // Generate storage recommendation for this pallet
-        const storageRec = recommendStorageLocation(state.racks, po.sku, palletId);
+        // Generate storage recommendation for this pallet (considering in-transit pallets)
+        const storageRec = recommendStorageLocation(state.racks, po.sku, palletId, state.pallets);
 
         const load: Load = {
           id: loadId,
@@ -789,28 +800,6 @@ export const useWarehouseStore = create<WarehouseState>()(
         const newFulfilled = po.fulfilledQty + quantity;
         const poComplete = newFulfilled >= po.targetQty;
 
-        const product = PRODUCTS.find((p) => p.sku === po.sku);
-        const availablePicker = findAvailablePickerForDepartment(get(), product?.department);
-        const putAwayTaskId = generatePickTaskId();
-        const putAwayTask: PickTask = {
-          id: putAwayTaskId,
-          salesOrderId: null,
-          origin: 'Production',
-          items: [
-            {
-              palletId,
-              sourceRackId: lineId,
-              sourceSlotIndex: 0,
-              sku: po.sku,
-              quantity: quantity,
-              picked: false,
-            },
-          ],
-          status: availablePicker ? 'Accepted' : 'PendingAcceptance',
-          assignedPickerId: availablePicker?.id ?? null,
-          createdAt: now,
-        };
-
         set((state) => ({
           loads: [...state.loads, load],
           batches: [...state.batches.filter((b) => b.id !== batch.id), batch],
@@ -842,20 +831,13 @@ export const useWarehouseStore = create<WarehouseState>()(
                 }
               : p,
           ),
-          pickTasks: [...state.pickTasks, putAwayTask],
         }));
 
-        if (availablePicker) {
-          get().pushToast(
-            `Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''} · Put-away task assigned to ${availablePicker.name}`,
-            'success',
-          );
-        } else {
-          get().pushToast(
-            `Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''} · Put-away task created (awaiting Picker)`,
-            'info',
-          );
-        }
+        get().pushToast(
+          `✓ Load confirmed on ${palletId} — Batch ${batch.id}${poComplete ? ' (production order complete)' : ''} · Storage recommendation ready`,
+          'success',
+        );
+
         get().enqueueSapSync(
           'PalletCreated',
           `Pallet ${palletId} completed on ${line.name} — Batch ${batch.id}, ${quantity} units of ${po.productName}`,
@@ -1061,8 +1043,8 @@ export const useWarehouseStore = create<WarehouseState>()(
           return err(`No available stock in storage for ${sku}`);
         }
 
-        // Try to auto-assign to an available Picker in this product's department
-        const availablePicker = findAvailablePickerForDepartment(state, product.department);
+        // Try to auto-assign to an available Storage Picker in this product's department
+        const availablePicker = findAvailablePickerByType(state, product.department, 'storage');
 
         const now = new Date().toISOString();
         const task: PickTask = {
@@ -1116,14 +1098,12 @@ export const useWarehouseStore = create<WarehouseState>()(
           );
         }
 
-        // Direct-dispatch (approved shortfall) top-ups bypass the Loading Bay
-        // entirely (spec §17) — Storage releases straight to the dispatch
-        // area, so the item is done the moment it leaves the rack.
+        // Mark item as picked regardless of dispatch type
+        const updatedItems = task.items.map((i) => (i.palletId === palletId ? { ...i, picked: true } : i));
+
+        // Direct-dispatch (approved shortfall) top-ups bypass the Loading Bay entirely (spec §17)
         const isDirectDispatch = task.origin === 'Bay-Topup';
-        const updatedItems = isDirectDispatch
-          ? task.items.map((i) => (i.palletId === palletId ? { ...i, picked: true } : i))
-          : task.items;
-        const taskCompleted = isDirectDispatch && updatedItems.every((i) => i.picked);
+        const taskCompleted = updatedItems.every((i) => i.picked);
 
         set((state) => ({
           racks: state.racks.map((r) =>
@@ -1145,13 +1125,11 @@ export const useWarehouseStore = create<WarehouseState>()(
                 }
               : p,
           ),
-          pickTasks: isDirectDispatch
-            ? state.pickTasks.map((t) =>
-                t.id === pickTaskId
-                  ? { ...t, items: updatedItems, status: taskCompleted ? 'Completed' : t.status }
-                  : t,
-              )
-            : state.pickTasks,
+          pickTasks: state.pickTasks.map((t) =>
+            t.id === pickTaskId
+              ? { ...t, items: updatedItems, status: taskCompleted ? 'Completed' : t.status }
+              : t,
+          ),
           movements: [
             ...state.movements,
             {
@@ -1276,6 +1254,40 @@ export const useWarehouseStore = create<WarehouseState>()(
         get().pushToast(`Pallet ${palletId} placed on ${bayRackId}`, 'success');
         get().enqueueSapSync('PickMovement', `Pallet ${palletId} moved to bay rack ${bayRackId}`);
         return ok({ completed });
+      },
+
+      // Loading Bay intake - place pallet in bay rack (no task required)
+      placePalletInBay: ({ palletId, bayRackId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot place pallets in bay — requires Picker`);
+        }
+        const pallet = state.pallets.find((p) => p.id === palletId);
+        if (!pallet || pallet.status !== 'InTransitToBay') {
+          return err(`Pallet ${palletId} is not in transit to bay (status: ${pallet?.status || 'unknown'})`);
+        }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move`);
+
+        const bayRack = state.bayRacks.find((b) => b.id === bayRackId);
+        if (!bayRack) return err(`Bay rack "${bayRackId}" not found`);
+        const freeSlot = bayRack.slots.find((s) => s.palletId === null);
+        if (!freeSlot) return err(`Bay rack ${bayRackId} has no free slot`);
+
+        set((state) => ({
+          bayRacks: state.bayRacks.map((b) =>
+            b.id === bayRackId
+              ? { ...b, slots: b.slots.map((s) => (s.index === freeSlot.index ? { ...s, palletId } : s)) }
+              : b,
+          ),
+          pallets: state.pallets.map((p) =>
+            p.id === palletId
+              ? { ...p, status: 'OnBay', location: { type: 'BayRack', bayRackId, slotIndex: freeSlot.index } }
+              : p,
+          ),
+        }));
+        get().pushToast(`Pallet ${palletId} placed in bay rack ${bayRackId}`, 'success');
+        get().enqueueSapSync('BayPlacement', `Pallet ${palletId} placed in bay by ${operatorId}`);
+        return ok(undefined);
       },
 
       assignDispatchPickingTasks: ({ salesOrderId, assignments }) => {
