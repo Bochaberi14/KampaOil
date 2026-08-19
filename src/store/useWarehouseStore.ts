@@ -54,7 +54,6 @@ import { unitsPerPallet, resolveScannedSku, PRODUCTS } from '../data/products';
 import {
   fetchProductionOrders,
   fetchSalesOrders,
-  postDispatchConfirmation,
   postGenericTransaction,
 } from '../mock-sap/sapClient';
 import {
@@ -65,7 +64,6 @@ import {
   generateReleaseId,
   generateHoldId,
   generateLoadId,
-  generateManifestId,
   generateMovementId,
   generatePickTaskId,
   generateRecallCaseId,
@@ -221,24 +219,6 @@ export type Result<T = undefined> =
 
 const ok = <T>(data: T): Result<T> => ({ ok: true, data });
 const err = <T>(error: string): Result<T> => ({ ok: false, error });
-
-// Once a Loader has pre-planned allocations for a sales order, a truck is
-// valid for it if it has an allocation row — not by matching the single
-// scalar assignedTruckId/salesOrderId fields. SOs nobody pre-planned keep
-// the original strict one-truck-per-SO behavior unchanged.
-function truckAllowedForOrder(
-  dispatchAllocations: DispatchAllocation[],
-  truck: Truck,
-  so: SalesOrder,
-): boolean {
-  const allocations = dispatchAllocations.filter((a) => a.salesOrderId === so.id);
-  if (allocations.length > 0) {
-    return allocations.some((a) => a.truckId === truck.id);
-  }
-  if (truck.salesOrderId && truck.salesOrderId !== so.id) return false;
-  if (so.assignedTruckId && so.assignedTruckId !== truck.id) return false;
-  return true;
-}
 
 interface WarehouseState {
   currentUser: User | null;
@@ -1970,7 +1950,8 @@ export const useWarehouseStore = create<WarehouseState>()(
       // from a Storage-shortfall/Production-bypass exception) is staged —
       // never emptied, never "in" the truck — and the handover printout is
       // generated.
-      scanDispatchLine: ({ salesOrderId, dispatchLineCode, operatorId }) => {
+      scanDispatchLine: (args) => {
+        const { salesOrderId, dispatchLineCode } = args;
         const state = get();
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);

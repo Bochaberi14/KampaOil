@@ -7,7 +7,7 @@ interface PrintSheetProps {
   children: ReactNode;
 }
 
-export function PrintSheet({ title, triggerLabel = 'Print', children }: PrintSheetProps) {
+export function PrintSheet({ triggerLabel = 'Print', children }: PrintSheetProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [isPrinting, setIsPrinting] = useState(false);
 
