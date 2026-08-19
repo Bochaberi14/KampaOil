@@ -26,6 +26,7 @@ export function PickerTasksPage() {
   const myCompletedTasks = pickTasks.filter(
     (t) => t.status === 'Completed' && t.assignedPickerId === currentUser?.id,
   );
+  const dispatchTasksCount = myAssignedTasks.filter((t) => t.origin === 'Dispatch').length;
   const selectedTask = pickTasks.find((t) => t.id === selectedTaskId) ?? null;
 
 
@@ -71,6 +72,17 @@ export function PickerTasksPage() {
         <p className="text-sm text-slate-400">Tasks assigned to you — click for details.</p>
       </div>
 
+      {dispatchTasksCount > 0 && (
+        <div className="rounded-xl bg-blue-500/10 border border-blue-500/30 p-4">
+          <p className="text-sm font-semibold text-blue-300">
+            🔔 You have {dispatchTasksCount} dispatch task{dispatchTasksCount > 1 ? 's' : ''} waiting
+          </p>
+          <p className="text-xs text-blue-200 mt-1">
+            Go to Dispatch page to stage products at the allocated truck
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
           {/* Assigned tasks */}
@@ -98,9 +110,16 @@ export function PickerTasksPage() {
                     <div className="text-xs text-slate-400 mb-1">
                       {t.items.filter((i) => i.picked).length}/{t.items.length} done
                     </div>
-                    <span className="inline-block px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 text-xs font-medium">
-                      Assigned
-                    </span>
+                    <div className="flex gap-2 justify-end items-center">
+                      {t.origin === 'Dispatch' && t.items.filter((i) => i.picked).length === 0 && (
+                        <span className="inline-block px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-medium animate-pulse">
+                          NEW
+                        </span>
+                      )}
+                      <span className="inline-block px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 text-xs font-medium">
+                        Assigned
+                      </span>
+                    </div>
                   </div>
                 </button>
               ))}
@@ -181,28 +200,43 @@ export function PickerTasksPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">From storage (zones)</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">From location</p>
                   <div className="space-y-1">
-                    {selectedTask.items.map((item) => {
-                      const zone = getZoneFromRackId(item.sourceRackId);
-                      return (
-                        <div key={item.palletId} className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5 flex justify-between items-center">
-                          <span>{item.palletId} at {item.sourceRackId}</span>
-                          {zone && (
-                            <span className="text-slate-500 font-mono text-[10px]">{zone.id} ({zone.name})</span>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {selectedTask.origin === 'Dispatch' ? (
+                      <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
+                        Loading Bay — scan bay rack, then pallet
+                      </div>
+                    ) : (
+                      selectedTask.items.map((item) => {
+                        const zone = getZoneFromRackId(item.sourceRackId);
+                        return (
+                          <div key={item.palletId} className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5 flex justify-between items-center">
+                            <span>{item.palletId} at {item.sourceRackId}</span>
+                            {zone && (
+                              <span className="text-slate-500 font-mono text-[10px]">{zone.id}</span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">To loading bay</p>
-                  <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
-                    Bay racks (system will guide you)
+                {selectedTask.origin === 'Dispatch' ? (
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Destination</p>
+                    <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
+                      Dispatch line (allocated truck)
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">To loading bay</p>
+                    <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
+                      Bay racks (system will guide you)
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-1">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</p>
@@ -217,8 +251,16 @@ export function PickerTasksPage() {
               </div>
 
               {selectedTask.status === 'Accepted' && (
-                <div className="rounded-lg border border-amber-800 bg-amber-500/10 px-3 py-2">
-                  <p className="text-xs text-amber-300">{getTaskInstructions(selectedTask)}</p>
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-amber-800 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs text-amber-300">{getTaskInstructions(selectedTask)}</p>
+                  </div>
+                  {selectedTask.origin === 'Dispatch' && (
+                    <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-3">
+                      <p className="text-xs text-blue-300 mb-2">Go to Dispatch → Stage at dispatch line</p>
+                      <p className="text-xs text-blue-200">Your task will be listed there ready to execute.</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

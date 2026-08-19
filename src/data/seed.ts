@@ -49,12 +49,12 @@ const createShelf = (id: string, zoneId: string, shelfNum: string, rackIds: stri
   rackIds,
 });
 
-// STORAGE ZONES: BIN-A (Rina 1L), BIN-B (Kasuku 1kg), BIN-C (Prestige 500g), OVERFLOW
+// STORAGE ZONES: BIN-A (Rina 1L), BIN-B (Prestige 500g), BIN-C (Kasuku 1kg), OVERFLOW
 export const STORAGE_ZONES: Zone[] = [
-  createZone('BIN-A', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
-  createZone('BIN-B', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
-  createZone('BIN-C', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
-  createZone('OVERFLOW', 'Oil & Refinery', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-A', 'Rina 1L', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-B', 'Prestige 500g', 'Storage', 'Oil & Refinery', false),
+  createZone('BIN-C', 'Kasuku 1kg', 'Storage', 'Oil & Refinery', false),
+  createZone('OVERFLOW', 'Overflow', 'Storage', 'Oil & Refinery', false),
 ];
 
 // STORAGE SHELVES: Each zone has 2 shelves (S-01, S-02) with 3 racks each
@@ -69,17 +69,16 @@ export const STORAGE_SHELVES: Shelf[] = [
   // BIN-C (Prestige 500g) - 2 shelves
   createShelf('BIN-C-S-01', 'BIN-C', '01', ['BIN-C-S-01-R-01', 'BIN-C-S-01-R-02', 'BIN-C-S-01-R-03']),
   createShelf('BIN-C-S-02', 'BIN-C', '02', ['BIN-C-S-02-R-01', 'BIN-C-S-02-R-02', 'BIN-C-S-02-R-03']),
-  // OVERFLOW - 3 shelves with 4 racks each
-  createShelf('OVERFLOW-S-01', 'OVERFLOW', '01', ['OVERFLOW-S-01-R-01', 'OVERFLOW-S-01-R-02', 'OVERFLOW-S-01-R-03', 'OVERFLOW-S-01-R-04']),
-  createShelf('OVERFLOW-S-02', 'OVERFLOW', '02', ['OVERFLOW-S-02-R-01', 'OVERFLOW-S-02-R-02', 'OVERFLOW-S-02-R-03', 'OVERFLOW-S-02-R-04']),
-  createShelf('OVERFLOW-S-03', 'OVERFLOW', '03', ['OVERFLOW-S-03-R-01', 'OVERFLOW-S-03-R-02', 'OVERFLOW-S-03-R-03', 'OVERFLOW-S-03-R-04']),
+  // OVERFLOW - 2 shelves with 3 racks each (matches other zones)
+  createShelf('OVERFLOW-S-01', 'OVERFLOW', '01', ['OVERFLOW-S-01-R-01', 'OVERFLOW-S-01-R-02', 'OVERFLOW-S-01-R-03']),
+  createShelf('OVERFLOW-S-02', 'OVERFLOW', '02', ['OVERFLOW-S-02-R-01', 'OVERFLOW-S-02-R-02', 'OVERFLOW-S-02-R-03']),
 ];
 
 // LOADING BAY ZONES: BIN-A, BIN-B, BIN-C (products) + BIN-D (returns)
 export const LOADING_BAY_ZONES: Zone[] = [
-  createZone('BIN-A-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
-  createZone('BIN-B-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
-  createZone('BIN-C-BAY', 'Oil & Refinery', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-A-BAY', 'Rina 1L', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-B-BAY', 'Prestige 500g', 'LoadingBay', 'Oil & Refinery', false),
+  createZone('BIN-C-BAY', 'Kasuku 1kg', 'LoadingBay', 'Oil & Refinery', false),
   createZone('BIN-D-BAY', 'Returns', 'LoadingBay', 'Returns', false),
 ];
 

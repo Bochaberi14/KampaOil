@@ -8,7 +8,7 @@ import { STORAGE_ZONES } from '../data/seed';
 import { canAccessDepartment, getPickerType } from '../rbac';
 
 type WizardStep = 'pallet-arriving' | 'rack-placement';
-type PickingStep = 'pallet-at-rack' | 'rack-scan' | 'pallet-leaving';
+type PickingStep = 'pallet-at-rack' | 'rack-scan';
 
 export function StoragePage() {
   const pallets = useWarehouseStore((s) => s.pallets);
@@ -133,22 +133,10 @@ export function StoragePage() {
       return;
     }
 
-    setPickingWizard({ ...pickingWizard, rackId, step: 'pallet-leaving' });
-    pushToast(`✓ Rack confirmed: ${rackId} — now scan pallet leaving storage`, 'success');
-  }
-
-  function handleScanPalletLeavingStorage(palletId: string) {
-    if (!pickingWizard.taskId || !pickingWizard.palletId || !pickingWizard.rackId || !currentUser) return;
-
-    if (palletId !== pickingWizard.palletId) {
-      pushToast(`❌ Wrong pallet! Expected ${pickingWizard.palletId}, scanned ${palletId}`, 'error');
-      return;
-    }
-
     const result = scanRackForPick({
       pickTaskId: pickingWizard.taskId,
       palletId: pickingWizard.palletId,
-      rackId: pickingWizard.rackId,
+      rackId,
       operatorId: currentUser.id,
     });
 
@@ -157,9 +145,10 @@ export function StoragePage() {
       return;
     }
 
-    pushToast(`✓ Pallet ${palletId} released from storage — ready for loading bay`, 'success');
+    pushToast(`✓ Pallet ${pickingWizard.palletId} released from storage — ready for loading bay`, 'success');
     setPickingWizard({ step: 'pallet-at-rack', taskId: null, palletId: null, rackId: null });
   }
+
 
   return (
     <div className="space-y-8">
@@ -170,13 +159,15 @@ export function StoragePage() {
         </p>
       </div>
 
-      <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-          <StepDot active={wizard.step === 'pallet-arriving'} label="1. Scan pallet arriving" />
-          <StepDot active={wizard.step === 'rack-placement'} label="2. Scan destination rack" />
-        </div>
+      {/* Storage Receiving Workflow - ONLY for Storage Pickers */}
+      {currentUser && getPickerType(currentUser.id) === 'storage' && (
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+            <StepDot active={wizard.step === 'pallet-arriving'} label="1. Scan pallet arriving" />
+            <StepDot active={wizard.step === 'rack-placement'} label="2. Scan destination rack" />
+          </div>
 
-        {wizard.step === 'pallet-arriving' && (
+          {wizard.step === 'pallet-arriving' && (
           <>
             <ScanInput
               label="Scan pallet arriving at storage"
@@ -212,7 +203,7 @@ export function StoragePage() {
                         freshRecommendation.isOverflow ? 'text-amber-300' : 'text-emerald-300'
                       }`}
                     >
-                      {freshRecommendation.isOverflow ? '⚠️  Overflow' : '📍 Recommended Location'}
+                      {freshRecommendation.isOverflow ? '⚠️  Overflow' : '✓ Move to'}
                     </p>
                     <p className={`font-mono font-semibold text-base ${freshRecommendation.isOverflow ? 'text-amber-100' : 'text-emerald-100'}`}>
                       {formatStorageLocation(freshRecommendation)}
@@ -235,8 +226,8 @@ export function StoragePage() {
               </>
             );
           })()}
-
-      </div>
+        </div>
+      )}
 
       {/* Picking workflow - when stock is requested (Storage Pickers only) */}
       {currentUser && getPickerType(currentUser.id) === 'storage' && (() => {
@@ -259,7 +250,6 @@ export function StoragePage() {
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                   <StepDot active={pickingWizard.step === 'pallet-at-rack'} label="1. Scan pallet at rack" />
                   <StepDot active={pickingWizard.step === 'rack-scan'} label="2. Scan rack location" />
-                  <StepDot active={pickingWizard.step === 'pallet-leaving'} label="3. Scan pallet leaving" />
                 </div>
 
                 {pickingWizard.step === 'pallet-at-rack' && (
@@ -287,23 +277,6 @@ export function StoragePage() {
                       placeholder="e.g. BIN-A-S-01-R-01"
                       onScan={handleScanPickingRack}
                       suggestions={[activePicking.items.find((i) => i.palletId === pickingWizard.palletId)?.sourceRackId || '']}
-                    />
-                    <button onClick={cancelPicking} className="text-xs text-blue-400 hover:text-blue-300">
-                      Cancel
-                    </button>
-                  </>
-                )}
-
-                {pickingWizard.step === 'pallet-leaving' && (
-                  <>
-                    <p className="text-sm text-blue-200">
-                      Pallet leaving storage — scan to confirm
-                    </p>
-                    <ScanInput
-                      label="Scan pallet barcode"
-                      placeholder="e.g. PLT-001"
-                      onScan={handleScanPalletLeavingStorage}
-                      suggestions={pickingWizard.palletId ? [pickingWizard.palletId] : []}
                     />
                     <button onClick={cancelPicking} className="text-xs text-blue-400 hover:text-blue-300">
                       Cancel

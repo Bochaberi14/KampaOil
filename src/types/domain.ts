@@ -11,7 +11,7 @@ export type Role =
 
 export type Department = 'Oil & Refinery';
 
-export type ZoneName = 'Oil & Refinery' | 'Returns';
+export type ZoneName = 'Oil & Refinery' | 'Returns' | 'Rina 1L' | 'Prestige 500g' | 'Kasuku 1kg' | 'Overflow';
 
 export interface Zone {
   id: string;

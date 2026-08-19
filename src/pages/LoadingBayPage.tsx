@@ -8,7 +8,7 @@ import { PRODUCTS } from '../data/products';
 import { LOADING_BAY_ZONES, LOADING_BAY_SHELVES } from '../data/seed';
 
 type WizardStep = 'bay-arriving' | 'bay-staging';
-type DispatchStep = 'pallet-at-rack' | 'dispatch-destination' | 'confirm-dispatch';
+type DispatchStep = 'scan-pallet' | 'scan-destination';
 
 export function LoadingBayPage() {
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
@@ -35,13 +35,11 @@ export function LoadingBayPage() {
     step: DispatchStep;
     taskId: string | null;
     palletId: string | null;
-    rackId: string | null;
     dispatchDestination: string | null;
   }>({
-    step: 'pallet-at-rack',
+    step: 'scan-pallet',
     taskId: null,
     palletId: null,
-    rackId: null,
     dispatchDestination: null,
   });
 
@@ -193,43 +191,30 @@ export function LoadingBayPage() {
   }
 
   function cancelDispatch() {
-    setDispatchWizard({ step: 'pallet-at-rack', taskId: null, palletId: null, rackId: null, dispatchDestination: null });
+    setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null });
   }
 
-  function handleScanPalletAtRack(rackId: string) {
+  function handleScanPallet(palletId: string) {
     if (!dispatchWizard.taskId || !currentUser) return;
     const task = pickTasks.find((t) => t.id === dispatchWizard.taskId);
     if (!task) return;
 
-    // Verify a pallet from this task is at this rack
-    const item = task.items.find((i) => i.sourceRackId === rackId && !i.picked);
+    // Verify this pallet is in this dispatch task
+    const item = task.items.find((i) => i.palletId === palletId && !i.picked);
     if (!item) {
-      pushToast(`❌ No pallet from this dispatch task is at rack ${rackId}`, 'error');
+      pushToast(`❌ Pallet ${palletId} not in this dispatch task`, 'error');
       return;
     }
 
-    setDispatchWizard({ ...dispatchWizard, step: 'dispatch-destination', palletId: item.palletId, rackId });
-    pushToast(`✓ Pallet ${item.palletId} found at ${rackId} — scan dispatch destination`, 'success');
+    setDispatchWizard({ ...dispatchWizard, step: 'scan-destination', palletId });
+    pushToast(`✓ Pallet ${palletId} ready — scan dispatch line`, 'success');
   }
 
-  function handleScanDispatchDestination(destination: string) {
+  function handleScanDispatchLine(destination: string) {
     if (!dispatchWizard.taskId || !dispatchWizard.palletId || !currentUser) return;
 
-    // Scan vehicle barcode or dispatch line
-    setDispatchWizard({ ...dispatchWizard, step: 'confirm-dispatch', dispatchDestination: destination });
-    pushToast(`✓ Dispatch destination: ${destination} — scan pallet to confirm release`, 'success');
-  }
-
-  function handleConfirmDispatch(palletId: string) {
-    if (!dispatchWizard.palletId || !currentUser) return;
-
-    if (palletId !== dispatchWizard.palletId) {
-      pushToast(`❌ Wrong pallet! Expected ${dispatchWizard.palletId}, scanned ${palletId}`, 'error');
-      return;
-    }
-
-    pushToast(`✓ Pallet ${palletId} released to ${dispatchWizard.dispatchDestination} for dispatch`, 'success');
-    setDispatchWizard({ step: 'pallet-at-rack', taskId: dispatchWizard.taskId, palletId: null, rackId: null, dispatchDestination: null });
+    pushToast(`✓ Pallet ${dispatchWizard.palletId} moved to ${destination}`, 'success');
+    setDispatchWizard({ step: 'scan-pallet', taskId: dispatchWizard.taskId, palletId: null, dispatchDestination: null });
   }
 
 
@@ -397,7 +382,7 @@ export function LoadingBayPage() {
                 </p>
                 {freshRecommendation ? (
                   <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-4 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide mb-2 text-emerald-300">📍 Recommended Location</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide mb-2 text-emerald-300">✓ Move to</p>
                     <p className="font-mono font-semibold text-base text-emerald-100">{formatBayLocation(freshRecommendation)}</p>
                   </div>
                 ) : (
@@ -427,7 +412,7 @@ export function LoadingBayPage() {
         const activeDispatch = dispatchWizard.taskId && dispatchTasks.find((t) => t.id === dispatchWizard.taskId);
 
         if (dispatchWizard.taskId && !activeDispatch) {
-          setDispatchWizard({ step: 'pallet-at-rack', taskId: null, palletId: null, rackId: null, dispatchDestination: null });
+          setDispatchWizard({ step: 'scan-pallet', taskId: null, palletId: null, dispatchDestination: null });
         }
 
         if (dispatchTasks.length === 0 && !activeDispatch) return null;
@@ -439,19 +424,18 @@ export function LoadingBayPage() {
             {activeDispatch ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                  <StepDot active={dispatchWizard.step === 'pallet-at-rack'} label="1. Scan pallet at rack" />
-                  <StepDot active={dispatchWizard.step === 'dispatch-destination'} label="2. Scan dispatch destination" />
-                  <StepDot active={dispatchWizard.step === 'confirm-dispatch'} label="3. Confirm release" />
+                  <StepDot active={dispatchWizard.step === 'scan-pallet'} label="1. Scan pallet from bay" />
+                  <StepDot active={dispatchWizard.step === 'scan-destination'} label="2. Scan dispatch line" />
                 </div>
 
-                {dispatchWizard.step === 'pallet-at-rack' && (
+                {dispatchWizard.step === 'scan-pallet' && (
                   <>
-                    <p className="text-sm text-purple-200">Pick pallet from storage rack for dispatch</p>
+                    <p className="text-sm text-purple-200">Take pallet from bay and move to dispatch</p>
                     <ScanInput
-                      label="Scan rack barcode (pallet location)"
-                      placeholder="e.g. BIN-A-S-01-R-01"
-                      onScan={handleScanPalletAtRack}
-                      suggestions={activeDispatch.items.filter((i) => !i.picked).map((i) => i.sourceRackId).filter((v, i, a) => a.indexOf(v) === i)}
+                      label="Scan pallet barcode"
+                      placeholder="e.g. PLT-001"
+                      onScan={handleScanPallet}
+                      suggestions={activeDispatch.items.filter((i) => !i.picked).map((i) => i.palletId)}
                     />
                     <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
                       Finish dispatch
@@ -459,33 +443,16 @@ export function LoadingBayPage() {
                   </>
                 )}
 
-                {dispatchWizard.step === 'dispatch-destination' && (
+                {dispatchWizard.step === 'scan-destination' && (
                   <>
                     <p className="text-sm text-purple-200">
-                      Pallet <span className="font-mono font-semibold">{dispatchWizard.palletId}</span> from <span className="font-mono">{dispatchWizard.rackId}</span> — scan dispatch destination
+                      Pallet <span className="font-mono font-semibold">{dispatchWizard.palletId}</span> — scan dispatch line
                     </p>
                     <ScanInput
-                      label="Scan vehicle or dispatch line barcode"
-                      placeholder="e.g. VEH-001 or BAY-01"
-                      onScan={handleScanDispatchDestination}
-                      suggestions={['VEH-001', 'VEH-002', 'BAY-01', 'BAY-02']}
-                    />
-                    <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
-                      Cancel
-                    </button>
-                  </>
-                )}
-
-                {dispatchWizard.step === 'confirm-dispatch' && (
-                  <>
-                    <p className="text-sm text-purple-200">
-                      Pallet ready — scan to confirm release to <span className="font-mono font-semibold">{dispatchWizard.dispatchDestination}</span>
-                    </p>
-                    <ScanInput
-                      label="Scan pallet barcode"
-                      placeholder="e.g. PLT-001"
-                      onScan={handleConfirmDispatch}
-                      suggestions={dispatchWizard.palletId ? [dispatchWizard.palletId] : []}
+                      label="Scan dispatch line barcode"
+                      placeholder="e.g. DISP-01"
+                      onScan={handleScanDispatchLine}
+                      suggestions={['DISP-01', 'DISP-02', 'DISP-03']}
                     />
                     <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
                       Cancel
@@ -499,7 +466,7 @@ export function LoadingBayPage() {
                 {dispatchTasks.map((task) => (
                   <button
                     key={task.id}
-                    onClick={() => setDispatchWizard({ step: 'pallet-at-rack', taskId: task.id, palletId: null, rackId: null, dispatchDestination: null })}
+                    onClick={() => setDispatchWizard({ step: 'scan-pallet', taskId: task.id, palletId: null, dispatchDestination: null })}
                     className="block w-full rounded-lg bg-purple-800/30 px-3 py-2 text-left text-sm hover:bg-purple-800/50"
                   >
                     <p className="font-mono font-semibold text-purple-200">{task.id}</p>

@@ -25,11 +25,9 @@ export function DispatchPage() {
   const loads = useWarehouseStore((s) => s.loads);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const dispatchVerifications = useWarehouseStore((s) => s.dispatchVerifications);
-  const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
   const availableInStorage = useWarehouseStore((s) => s.availableInStorage);
   const availableInProduction = useWarehouseStore((s) => s.availableInProduction);
-  const divertLoadedPalletToDirectDispatch = useWarehouseStore((s) => s.divertLoadedPalletToDirectDispatch);
   const scanDispatchLine = useWarehouseStore((s) => s.scanDispatchLine);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
@@ -38,7 +36,7 @@ export function DispatchPage() {
   const [selectedSOId, setSelectedSOId] = useState<string | null>(null);
   const [dispatchPickingState, setDispatchPickingState] = useState<{
     taskId: string | null;
-    step: 'task-select' | 'bay-rack' | 'pallet';
+    step: 'task-select' | 'bay-rack' | 'pallet' | 'scan-line' | 'scan-vehicle';
     currentPalletIndex: number;
     bayRackId: string | null;
   }>({
@@ -98,18 +96,6 @@ export function DispatchPage() {
         .filter((palletId) => loads.find((l) => l.palletId === palletId)?.sku === selectedSO.sku)
     : [];
 
-  const approvedProductionApproval = selectedSO
-    ? directDispatchApprovals.find(
-        (a) => a.salesOrderId === selectedSO.id && a.status === 'Approved' && a.source === 'Production',
-      )
-    : undefined;
-  const loadedPalletsForSku = selectedSO
-    ? pallets
-        .filter((p) => p.status === 'Loaded')
-        .map((p) => p.id)
-        .filter((palletId) => loads.find((l) => l.palletId === palletId)?.sku === selectedSO.sku)
-    : [];
-
   function handleStartDispatchPicking(taskId: string) {
     setDispatchPickingState({
       taskId,
@@ -158,12 +144,7 @@ export function DispatchPage() {
       pushToast(`Next: ${currentDispatchTask.items[nextIndex].palletId}`, 'info');
     } else {
       pushToast(`All ${currentDispatchTask.items.length} pallets staged ✓`, 'success');
-      setDispatchPickingState({
-        taskId: null,
-        step: 'task-select',
-        currentPalletIndex: 0,
-        bayRackId: null,
-      });
+      setDispatchPickingState((s) => ({ ...s, step: 'scan-line' }));
     }
   }
 
@@ -176,14 +157,35 @@ export function DispatchPage() {
     });
   }
 
-  function handleDivertPallet(palletId: string) {
-    if (!selectedSO || !currentUser) return;
-    const result = divertLoadedPalletToDirectDispatch({
-      salesOrderId: selectedSO.id,
-      palletId,
-      operatorId: currentUser.id,
+  function handleScanDispatchLineForTask(lineCode: string) {
+    if (!currentDispatchTask || !assignedTruck) return;
+
+    // Verify it's the correct dispatch line
+    if (lineCode !== assignedTruck.dispatchLine) {
+      pushToast(`Wrong line — expected ${assignedTruck.dispatchLine}, scanned ${lineCode}`, 'error');
+      return;
+    }
+
+    pushToast(`✓ Dispatch line confirmed — now scan vehicle`, 'success');
+    setDispatchPickingState((s) => ({ ...s, step: 'scan-vehicle' }));
+  }
+
+  function handleScanVehicleForTask(vehicleId: string) {
+    if (!currentDispatchTask || !assignedTruck) return;
+
+    // Verify it's the correct vehicle
+    if (vehicleId !== assignedTruck.plate && vehicleId !== assignedTruck.id) {
+      pushToast(`Wrong vehicle — expected ${assignedTruck.plate}, scanned ${vehicleId}`, 'error');
+      return;
+    }
+
+    pushToast(`✓ Task completed: all pallets staged at ${assignedTruck.dispatchLine} for ${assignedTruck.plate}`, 'success');
+    setDispatchPickingState({
+      taskId: null,
+      step: 'task-select',
+      currentPalletIndex: 0,
+      bayRackId: null,
     });
-    if (!result.ok) pushToast(result.error, 'error');
   }
 
   function handleScanLine(lineCode: string) {
@@ -210,9 +212,9 @@ export function DispatchPage() {
       </div>
 
       {myDispatchPickingTasks.length > 0 && can(currentUser?.role, 'execute:pickTask') && (
-        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="font-semibold text-slate-200">Dispatch Picking (My Tasks)</h2>
-          <p className="text-xs text-slate-500">Move assigned pallets from bay to dispatch line</p>
+        <div className="space-y-4 rounded-2xl border border-violet-800 bg-violet-950/20 p-6">
+          <h2 className="font-semibold text-violet-200">My Dispatch Tasks</h2>
+          <p className="text-xs text-violet-300">Scan to move pallets from bay to dispatch line, then verify with vehicle</p>
 
           {dispatchPickingState.taskId === null ? (
             <div className="space-y-2">
@@ -277,6 +279,40 @@ export function DispatchPage() {
                     placeholder="e.g. PLT-001"
                     onScan={handleScanPalletAtBay}
                     suggestions={[currentPalletItem?.palletId || '']}
+                  />
+                </div>
+              )}
+
+              {dispatchPickingState.step === 'scan-line' && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Move pallets ✓</span>
+                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">2. Scan dispatch line</span>
+                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan vehicle</span>
+                  </div>
+                  <p className="text-sm text-violet-200">Scan dispatch line {assignedTruck?.dispatchLine}</p>
+                  <ScanInput
+                    label="Scan dispatch line barcode"
+                    placeholder={`e.g. ${assignedTruck?.dispatchLine}`}
+                    onScan={handleScanDispatchLineForTask}
+                    suggestions={assignedTruck?.dispatchLine ? [assignedTruck.dispatchLine] : []}
+                  />
+                </div>
+              )}
+
+              {dispatchPickingState.step === 'scan-vehicle' && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Move pallets ✓</span>
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">2. Scan dispatch line ✓</span>
+                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">3. Scan vehicle</span>
+                  </div>
+                  <p className="text-sm text-violet-200">Scan vehicle {assignedTruck?.plate} to confirm</p>
+                  <ScanInput
+                    label="Scan vehicle barcode or plate"
+                    placeholder={`e.g. ${assignedTruck?.plate}`}
+                    onScan={handleScanVehicleForTask}
+                    suggestions={assignedTruck ? [assignedTruck.plate, assignedTruck.id] : []}
                   />
                 </div>
               )}
@@ -434,29 +470,6 @@ export function DispatchPage() {
           )}
         </div>
 
-        {selectedSO && approvedProductionApproval && (
-          <div className="space-y-3 rounded-2xl border border-violet-800 bg-violet-950/20 p-6 lg:col-span-2">
-            <div>
-              <h2 className="font-semibold text-violet-200">Divert a pallet straight from Production</h2>
-              <p className="text-xs text-violet-300/80">
-                Approved — scan a pallet that's still Loaded on the line to send it straight to
-                dispatch, skipping storage and the bay entirely.
-              </p>
-            </div>
-            {!can(currentUser?.role, 'execute:scan') ? (
-              <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
-              </p>
-            ) : (
-              <ScanInput
-                label={`Scan a Loaded pallet of ${selectedSO.productName}`}
-                placeholder="e.g. PLT-005"
-                onScan={handleDivertPallet}
-                suggestions={loadedPalletsForSku}
-              />
-            )}
-          </div>
-        )}
 
         {selectedSO && readyForDirectDispatch.length > 0 && (
           <div className="rounded-2xl border border-violet-800 bg-violet-950/20 p-6 text-xs text-violet-300/80 lg:col-span-2">

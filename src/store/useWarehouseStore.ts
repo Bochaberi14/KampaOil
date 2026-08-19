@@ -348,11 +348,6 @@ interface WarehouseState {
   rejectDirectDispatchRequest: (approvalId: string, operatorId: string) => Result;
   // Diverts a still-Loaded (on-the-line) pallet straight to the dispatch area
   // under an Approved 'Production' direct-dispatch approval.
-  divertLoadedPalletToDirectDispatch: (args: {
-    salesOrderId: string;
-    palletId: string;
-    operatorId: string;
-  }) => Result;
   // Loader-only: the collecting vehicle is captured when it physically
   // arrives (SAP never provides it) — generates a permanent vehicle
   // barcode tied to this sales order.
@@ -1715,62 +1710,6 @@ export const useWarehouseStore = create<WarehouseState>()(
           'success',
         );
         return ok({ task: topUpResult.data.task });
-      },
-
-      divertLoadedPalletToDirectDispatch: ({ salesOrderId, palletId, operatorId }) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:scan')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
-        }
-        const so = state.salesOrders.find((s) => s.id === salesOrderId);
-        if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const approval = state.directDispatchApprovals.find(
-          (a) => a.salesOrderId === salesOrderId && a.status === 'Approved' && a.source === 'Production',
-        );
-        if (!approval) {
-          return err(`No approved Production direct-dispatch for ${salesOrderId} — request approval first`);
-        }
-        const pallet = state.pallets.find((p) => p.id === palletId);
-        if (!pallet || pallet.status !== 'Loaded') {
-          return err(`Pallet ${palletId} is not on the line and Loaded (status: ${pallet?.status ?? 'unknown'})`);
-        }
-        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot divert until the hold is released`);
-        const load = state.loads.find((l) => l.palletId === palletId);
-        if (!load) return err('Load record not found for this pallet');
-        if (load.sku !== so.sku) {
-          return err(
-            `Product mismatch — pallet ${palletId} is ${load.productName}, sales order requires ${so.productName}. Scan rejected.`,
-          );
-        }
-        // Even an approved exception can't move unreleased stock.
-        const releasedRemaining = so.releasedQty - so.dispatchedQty;
-        if (load.quantity > releasedRemaining) {
-          return err(
-            `Only ${releasedRemaining.toLocaleString()} released units remain for ${salesOrderId} — not enough to divert this pallet`,
-          );
-        }
-
-        set((state) => ({
-          pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'InTransitToTruck', location: { type: 'InTransit' } } : p,
-          ),
-          movements: [
-            ...state.movements,
-            {
-              id: generateMovementId(),
-              palletId,
-              from: `Line ${load.lineId}`,
-              to: 'Dispatch Area (Direct from Production)',
-              timestamp: new Date().toISOString(),
-              operatorId,
-            },
-          ],
-        }));
-        get().pushToast(
-          `Pallet ${palletId} diverted straight from Production — scan it onto a truck below`,
-          'success',
-        );
-        return ok(undefined);
       },
 
       rejectDirectDispatchRequest: (approvalId, operatorId) => {

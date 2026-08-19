@@ -6,6 +6,7 @@ import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
 import { HandoverVerificationDocument } from '../components/HandoverVerificationDocument';
 import { filterPickersByType } from '../rbac';
 import { USERS } from '../data/seed';
+import { calculateSmartDispatchSuggestion, formatDispatchSuggestion } from '../utils/dispatchUtils';
 import type { SalesOrder } from '../types/domain';
 
 type OrderTab = 'new' | 'pending' | 'inProgress' | 'completed';
@@ -29,8 +30,10 @@ export function DispatchPlanningPage() {
   const releaseSalesOrderQuantity = useWarehouseStore((s) => s.releaseSalesOrderQuantity);
   const assignPickTaskToPickers = useWarehouseStore((s) => s.assignPickTaskToPickers);
   const registerVehicleForSalesOrder = useWarehouseStore((s) => s.registerVehicleForSalesOrder);
-  const verifyDispatchVehicle = useWarehouseStore((s) => s.verifyDispatchVehicle);
   const pushToast = useWarehouseStore((s) => s.pushToast);
+  const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
+  const availableInStorage = useWarehouseStore((s) => s.availableInStorage);
+  const availableInProduction = useWarehouseStore((s) => s.availableInProduction);
 
   const [activeTab, setActiveTab] = useState<OrderTab>('new');
   const [selectedSOId, setSelectedSOId] = useState<string | null>(null);
@@ -39,7 +42,8 @@ export function DispatchPlanningPage() {
   const [pickerRows, setPickerRows] = useState<{ pickerId: string; qty: string }[]>([{ pickerId: '', qty: '' }]);
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
-  const [vehicleBarcode, setVehicleBarcode] = useState('');
+  const [plateConfirmed, setPlateConfirmed] = useState(false);
+  const [lastRelease, setLastRelease] = useState<{ soId: string; qty: number } | null>(null);
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
   const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
@@ -77,13 +81,7 @@ export function DispatchPlanningPage() {
   );
   const remainingToAllocate = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
 
-  function handleAllocate() {
-    if (!selectedSO || !dispatchLine) {
-      pushToast('Select a dispatch line', 'error');
-      return;
-    }
-    pushToast(`Dispatch line ${dispatchLine} allocated for ${selectedSO.id}`, 'success');
-  }
+
 
   function handleRelease() {
     if (!selectedSO || !currentUser) return;
@@ -102,6 +100,7 @@ export function DispatchPlanningPage() {
       return;
     }
     pushToast(`Released ${parsedQty} units for ${selectedSO.id}`, 'success');
+    setLastRelease({ soId: selectedSO.id, qty: parsedQty });
     setReleaseQty('');
   }
 
@@ -129,6 +128,17 @@ export function DispatchPlanningPage() {
     if (duplicates.length > 0) {
       pushToast(
         `Cannot assign the same picker twice. Duplicate: ${USERS.find((u) => u.id === duplicates[0])?.name || duplicates[0]}`,
+        'error',
+      );
+      return;
+    }
+
+    // Validate total assigned quantity doesn't exceed what's actually available in the Bay
+    const totalAssigned = assignments.reduce((sum, a) => sum + a.qty, 0);
+    const bayAvailable = availableOnBay(selectedSO.sku);
+    if (totalAssigned > bayAvailable) {
+      pushToast(
+        `Cannot assign ${totalAssigned} units — only ${bayAvailable.toLocaleString()} units available in Loading Bay`,
         'error',
       );
       return;
@@ -168,23 +178,6 @@ export function DispatchPlanningPage() {
     setDriverName('');
   }
 
-  function handleVerifyVehicle() {
-    if (!soVerification || !currentUser || !vehicleBarcode.trim()) {
-      pushToast('Scan vehicle barcode', 'error');
-      return;
-    }
-    const result = verifyDispatchVehicle({
-      verificationId: soVerification.id,
-      vehicleBarcode,
-      operatorId: currentUser.id,
-    });
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-    pushToast('Vehicle verified successfully', 'success');
-    setVehicleBarcode('');
-  }
 
   return (
     <div className="space-y-6">
@@ -270,7 +263,6 @@ export function DispatchPlanningPage() {
               remainingToAllocate={remainingToAllocate}
               dispatchLine={dispatchLine}
               setDispatchLine={setDispatchLine}
-              handleAllocate={handleAllocate}
               remainingToRelease={remainingToRelease}
               releaseQty={releaseQty}
               setReleaseQty={setReleaseQty}
@@ -284,10 +276,13 @@ export function DispatchPlanningPage() {
               setPlate={setPlate}
               driverName={driverName}
               setDriverName={setDriverName}
+              plateConfirmed={plateConfirmed}
+              setPlateConfirmed={setPlateConfirmed}
               handleRegisterVehicle={handleRegisterVehicle}
-              vehicleBarcode={vehicleBarcode}
-              setVehicleBarcode={setVehicleBarcode}
-              handleVerifyVehicle={handleVerifyVehicle}
+              availableOnBay={availableOnBay}
+              availableInStorage={availableInStorage}
+              availableInProduction={availableInProduction}
+              lastRelease={lastRelease}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -310,7 +305,6 @@ function DispatchOrderPanel({
   remainingToAllocate,
   dispatchLine,
   setDispatchLine,
-  handleAllocate,
   remainingToRelease,
   releaseQty,
   setReleaseQty,
@@ -324,10 +318,12 @@ function DispatchOrderPanel({
   setPlate,
   driverName,
   setDriverName,
+  plateConfirmed,
+  setPlateConfirmed,
   handleRegisterVehicle,
-  vehicleBarcode,
-  setVehicleBarcode,
-  handleVerifyVehicle,
+  availableOnBay,
+  availableInStorage,
+  availableInProduction,
 }: any) {
   const trucks = useWarehouseStore((s) => s.trucks);
   const assignedTruck = order.assignedTruckId ? trucks.find((t) => t.id === order.assignedTruckId) : undefined;
@@ -357,54 +353,158 @@ function DispatchOrderPanel({
         </div>
       </div>
 
-      {/* STEP 1: Allocate Dispatch Line */}
-      {bucket === 'new' && remainingToAllocate > 0 && unoccupiedDispatchLines.length > 0 && (
+      {/* STEP 1: Allocate Dispatch Line (for new & pending orders) */}
+      {(bucket === 'new' || bucket === 'pending') && remainingToAllocate > 0 && !assignedTruck && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 1: Allocate Dispatch Line</p>
           <div className="space-y-2">
             <label className="block text-xs font-medium text-slate-300">Select Dispatch Line</label>
-            <select
-              value={dispatchLine}
-              onChange={(e) => setDispatchLine(e.target.value)}
-              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white"
-            >
-              <option value="">Choose a line...</option>
-              {unoccupiedDispatchLines.map((line: string) => (
-                <option key={line} value={line}>{line}</option>
-              ))}
-            </select>
+            {dispatchLine ? (
+              <div className="w-full rounded bg-emerald-900/30 border border-emerald-500/50 px-3 py-2 text-sm text-emerald-100 font-medium">
+                ✓ {dispatchLine}
+              </div>
+            ) : (
+              <select
+                value={dispatchLine}
+                onChange={(e) => setDispatchLine(e.target.value)}
+                className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white"
+              >
+                <option value="">Choose a line...</option>
+                {unoccupiedDispatchLines.map((line: string) => (
+                  <option key={line} value={line}>{line}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 1.5: Dispatch Line Required Message */}
+      {!dispatchLine && soPickTasks.length === 0 && order.releasedQty === 0 && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 mt-4">
+          <p className="text-xs text-amber-300 font-medium">⚠ Dispatch Line Required</p>
+          <p className="text-xs text-amber-200 mt-1">You must allocate a dispatch line in Step 1 before proceeding.</p>
+        </div>
+      )}
+
+      {/* STEP 2: Register Vehicle (moved here - after dispatch line, before release) */}
+      {dispatchLine && !assignedTruck && soPickTasks.length === 0 && order.releasedQty === 0 && (
+        <div className="space-y-3 border-t border-slate-800 pt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-orange-400">Step 2: Register Vehicle</p>
+          <div className="space-y-2">
+            <input
+              type="text"
+              placeholder="Vehicle Plate (e.g., KCB-123D)"
+              value={plate}
+              onChange={(e) => setPlate(e.target.value)}
+              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder-slate-400"
+            />
+            <input
+              type="text"
+              placeholder="Driver Name"
+              value={driverName}
+              onChange={(e) => setDriverName(e.target.value)}
+              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder-slate-400"
+            />
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={plateConfirmed}
+                onChange={(e) => setPlateConfirmed(e.target.checked)}
+              />
+              I confirm that the vehicle registration matches the physical vehicle.
+            </label>
             <button
-              onClick={handleAllocate}
-              disabled={!dispatchLine}
-              className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-blue-700"
+              onClick={handleRegisterVehicle}
+              disabled={!plate.trim() || !driverName.trim() || !plateConfirmed}
+              className="w-full rounded bg-orange-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-orange-700"
             >
-              Allocate {dispatchLine || 'Selected Line'}
+              Register Vehicle
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 2 & 3: Release Quantity + Assign Pickers (BUNDLED) */}
-      {dispatchLine && soPickTasks.length === 0 && order.releasedQty === 0 && (
+      {/* STEP 3 & 4: Release Quantity + Assign Pickers (BUNDLED) */}
+      {dispatchLine && assignedTruck && soPickTasks.length === 0 && remainingToRelease > 0 && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Steps 2 & 3: Release Quantity + Assign Pickers</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Steps 3 & 4: Release Quantity + Assign Pickers</p>
+
+          {/* Stock Availability Display */}
+          {order.sku && (
+            (() => {
+              const bayAvail = availableOnBay(order.sku);
+              const storageAvail = availableInStorage(order.sku);
+              const prodAvail = availableInProduction(order.sku);
+              const suggestion = calculateSmartDispatchSuggestion(
+                order.sku,
+                remainingToRelease,
+                bayAvail,
+                storageAvail,
+                prodAvail
+              );
+              const formatted = formatDispatchSuggestion(suggestion);
+              return (
+                <div className={`rounded-lg p-3 ${formatted.isShortfall ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-emerald-500/10 border border-emerald-500/30'}`}>
+                  <p className={`text-xs font-semibold mb-2 ${formatted.isShortfall ? 'text-amber-300' : 'text-emerald-300'}`}>
+                    Stock Availability
+                  </p>
+                  {formatted.lines.map((line, idx) => (
+                    <p key={idx} className={`text-xs font-mono ${formatted.isShortfall ? 'text-amber-200' : 'text-emerald-200'}`}>
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              );
+            })()
+          )}
+
 
           {/* Release Quantity Input */}
           <div className="space-y-2">
             <label className="block text-xs font-medium text-slate-300">Quantity to Release (max: {remainingToRelease})</label>
             <input
-              type="number"
-              min="1"
-              max={remainingToRelease}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
               value={releaseQty}
-              onChange={(e) => setReleaseQty(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value.replace(/[^0-9]/g, '');
+                if (val === '' || Number(val) <= remainingToRelease) {
+                  setReleaseQty(val);
+                }
+              }}
               className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white"
+              placeholder="Enter quantity"
             />
           </div>
 
           {/* Assign Pickers Based on Released Quantity */}
           {releaseQty && (
             <div className="space-y-2">
+              {/* Storage Source Context */}
+              {order.sku && (
+                (() => {
+                  const bayAvail = availableOnBay(order.sku);
+                  const storageAvail = availableInStorage(order.sku);
+                  const needed = Number(releaseQty);
+                  let fromBay = Math.min(bayAvail, needed);
+                  let remaining = needed - fromBay;
+                  let fromStorage = Math.min(storageAvail, remaining);
+                  remaining -= fromStorage;
+                  const fromProd = remaining;
+
+                  return (
+                    <div className="rounded-lg bg-slate-800/60 p-2 text-xs text-slate-300">
+                      <p className="font-semibold mb-1">Pickers will source from:</p>
+                      {fromBay > 0 && <p>• Loading Bay: {fromBay.toLocaleString()} units</p>}
+                      {fromStorage > 0 && <p>• Storage: {fromStorage.toLocaleString()} units</p>}
+                      {fromProd > 0 && <p>• Production: {fromProd.toLocaleString()} units</p>}
+                    </div>
+                  );
+                })()
+              )}
+
               <label className="block text-xs font-medium text-slate-300">Assign Pickers for {releaseQty} units</label>
               {pickerRows.map((row: any, i: number) => (
                 <div key={i} className="flex gap-2">
@@ -423,14 +523,17 @@ function DispatchOrderPanel({
                     ))}
                   </select>
                   <input
-                    type="number"
-                    min="1"
-                    max={Number(releaseQty)}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={row.qty}
                     onChange={(e) => {
-                      const newRows = [...pickerRows];
-                      newRows[i].qty = e.target.value;
-                      setPickerRows(newRows);
+                      const val = e.target.value.replace(/[^0-9]/g, '');
+                      if (val === '' || Number(val) <= Number(releaseQty)) {
+                        const newRows = [...pickerRows];
+                        newRows[i].qty = val;
+                        setPickerRows(newRows);
+                      }
                     }}
                     placeholder="Qty"
                     className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
@@ -479,65 +582,10 @@ function DispatchOrderPanel({
         </div>
       )}
 
-      {/* STEP 4: Register Vehicle */}
-      {order.releasedQty > 0 && !assignedTruck && (
-        <div className="space-y-3 border-t border-slate-800 pt-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-orange-400">Step 4: Register Vehicle</p>
-          <div className="space-y-2">
-            <input
-              type="text"
-              placeholder="Vehicle Plate (e.g., KCB-123D)"
-              value={plate}
-              onChange={(e) => setPlate(e.target.value)}
-              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder-slate-400"
-            />
-            <input
-              type="text"
-              placeholder="Driver Name"
-              value={driverName}
-              onChange={(e) => setDriverName(e.target.value)}
-              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder-slate-400"
-            />
-            <button
-              onClick={handleRegisterVehicle}
-              disabled={!plate.trim() || !driverName.trim()}
-              className="w-full rounded bg-orange-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-orange-700"
-            >
-              Register Vehicle
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* STEP 5: Verify Vehicle */}
-      {assignedTruck && !verification && (
-        <div className="space-y-3 border-t border-slate-800 pt-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-orange-400">Step 5: Verify Vehicle</p>
-          <div className="bg-slate-800 rounded p-2 text-xs text-slate-300">
-            <p>Vehicle: <span className="text-slate-100 font-medium">{assignedTruck.plate}</span></p>
-            <p>Driver: <span className="text-slate-100 font-medium">{assignedTruck.driverName}</span></p>
-          </div>
-          <input
-            type="text"
-            placeholder="Scan vehicle barcode..."
-            value={vehicleBarcode}
-            onChange={(e) => setVehicleBarcode(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleVerifyVehicle()}
-            className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder-slate-400"
-            autoFocus
-          />
-          <button
-            onClick={handleVerifyVehicle}
-            disabled={!vehicleBarcode.trim()}
-            className="w-full rounded bg-orange-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-orange-700"
-          >
-            Verify & Generate Documents
-          </button>
-        </div>
-      )}
 
-      {/* Documents Section */}
-      {verification?.status === 'Verified' && (
+      {/* Documents Section - Show after vehicle registration */}
+      {verification && (
         <div className="space-y-2 border-t border-slate-800 pt-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">✓ Dispatch Documents</p>
           <PrintSheet title="Dispatch Manifest" triggerLabel="📋 Print Manifest">

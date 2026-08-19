@@ -20,8 +20,8 @@ export function recommendStorageLocation(
   // Map SKU to bin ID (Product-specific bins)
   const skuToBin: Record<string, string> = {
     'RINA1L': 'BIN-A',
-    'KASUKU1KG': 'BIN-B',
-    'PRESTIGE500G': 'BIN-C',
+    'PRESTIGE500G': 'BIN-B',
+    'KASUKU1KG': 'BIN-C',
   };
 
   const targetBin = skuToBin[sku];
@@ -140,7 +140,14 @@ export function recommendBayLocation(
 
 // Format bay location for display
 export function formatBayLocation(recommendation: { rackId: string }): string {
+  // Bay location follows bin/shelf/rack format: BIN-A-S-01-R-01
+  const binMatch = recommendation.rackId.match(/BIN-([A-Z])/);
+  const shelfMatch = recommendation.rackId.match(/S-(\d+)/);
   const rackMatch = recommendation.rackId.match(/R-(\d+)/);
+
+  const binId = binMatch ? `BIN-${binMatch[1]}` : 'BIN-?';
+  const shelfNum = shelfMatch ? shelfMatch[1] : '?';
   const rackNum = rackMatch ? rackMatch[1] : '?';
-  return `Rack ${rackNum}`;
+
+  return `${binId} → Shelf ${shelfNum} → Rack ${rackNum}`;
 }

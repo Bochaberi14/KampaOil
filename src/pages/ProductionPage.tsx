@@ -13,9 +13,9 @@ type Step = 'line' | 'product' | 'pallet';
 function getZoneForSku(sku: string) {
   // Map specific products to their zones (handles refrigeration requirements)
   const skuToZone: Record<string, string> = {
-    'RINA1L': 'BIN-A',           // Edible Oils (not refrigerated)
-    'PRESTIGE500G': 'BIN-B',     // Margarine & Shortening (refrigerated)
-    'TOSS500G': 'BIN-C',         // Detergents & Soaps
+    'RINA1L': 'BIN-A',           // Oil & Refinery
+    'PRESTIGE500G': 'BIN-B',     // Oil & Refinery (refrigerated)
+    'KASUKU1KG': 'BIN-C',        // Oil & Refinery
   };
 
   const zoneId = skuToZone[sku];
@@ -173,7 +173,7 @@ export function ProductionPage() {
               {lastRecommendation && (
                 <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4 text-sm">
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300 mb-2">
-                    ✓ Storage Destination Recommended
+                    ✓ Move to
                   </p>
                   <div className="bg-emerald-900/20 rounded px-3 py-2">
                     <p className="text-emerald-100 font-mono font-semibold">
@@ -181,7 +181,7 @@ export function ProductionPage() {
                     </p>
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
-                    Hand picker will move this pallet to the recommended location
+                    Hand picker will move this pallet to this location
                   </p>
                 </div>
               )}
