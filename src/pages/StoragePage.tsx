@@ -26,6 +26,8 @@ export function StoragePage() {
     palletId: null,
   });
 
+  const [lastArrivedDirectDispatch, setLastArrivedDirectDispatch] = useState<string | null>(null);
+
   const [pickingWizard, setPickingWizard] = useState<{
     step: PickingStep;
     taskId: string | null;
@@ -63,6 +65,7 @@ export function StoragePage() {
 
     // Pallet already in transit — resume at rack placement step
     if (pallet.status === 'InTransitToStorage') {
+      setLastArrivedDirectDispatch(null);
       setWizard({ step: 'rack-placement', palletId });
       return;
     }
@@ -72,7 +75,20 @@ export function StoragePage() {
       pushToast(result.error, 'error');
       return;
     }
+
+    // Production Direct Dispatch: pallet is now InTransitToTruck — it skips
+    // racking entirely and heads straight to dispatch, so don't send the
+    // picker into the rack-placement step.
+    const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
+    if (updatedPallet?.status === 'InTransitToTruck') {
+      pushToast(`⚡ Pallet ${palletId} routed directly to dispatch — bypassing storage`, 'success');
+      setLastArrivedDirectDispatch(palletId);
+      setWizard({ step: 'pallet-arriving', palletId: null });
+      return;
+    }
+
     pushToast(`✓ Pallet ${palletId} arrived at storage — now scan destination rack`, 'success');
+    setLastArrivedDirectDispatch(null);
     setWizard({ step: 'rack-placement', palletId });
   }
 
@@ -182,6 +198,17 @@ export function StoragePage() {
 
           {wizard.step === 'pallet-arriving' && (
           <>
+            {lastArrivedDirectDispatch && (
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                  ⚡ Move direct to dispatch
+                </p>
+                <p className="text-xs text-amber-100">
+                  Pallet <span className="font-mono font-semibold">{lastArrivedDirectDispatch}</span> is not going to a
+                  rack — take it to the loading bay, scan its arrival there, then straight to dispatch.
+                </p>
+              </div>
+            )}
             <ScanInput
               label="Scan pallet arriving at storage"
               placeholder="e.g. PLT-002"
@@ -264,6 +291,14 @@ export function StoragePage() {
                   <StepDot active={pickingWizard.step === 'pallet-at-rack'} label="1. Scan pallet at rack" />
                   <StepDot active={pickingWizard.step === 'rack-scan'} label="2. Scan rack location" />
                 </div>
+
+                {activePicking.directDispatch && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+                    <p className="text-xs text-amber-300 font-medium">
+                      ⚡ DIRECT DISPATCH: Pallets go directly to dispatch line, bypassing staging
+                    </p>
+                  </div>
+                )}
 
                 {pickingWizard.step === 'pallet-at-rack' && (
                   <>

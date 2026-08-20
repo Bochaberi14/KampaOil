@@ -339,9 +339,21 @@ interface WarehouseState {
     bayRackId: string;
     operatorId: string;
   }) => Result;
+  // Direct-dispatch pallets (InTransitToTruck) skip bay staging entirely —
+  // this is their one loading-bay checkpoint: confirm physical arrival,
+  // no destination rack scan, then the picker takes it straight to dispatch.
+  scanPalletArrivedForDirectDispatch: (args: {
+    palletId: string;
+    operatorId: string;
+  }) => Result<{ dispatchLine: string | null }>;
 
   // Phase 2 — Dispatch picking (bay → dispatch line)
   assignDispatchPickingTasks: (args: {
+    salesOrderId: string;
+    assignments: { pickerId: string; qty: number }[];
+    operatorId: string;
+  }) => Result<{ tasks: PickTask[] }>;
+  assignStorageDirectDispatchTasks: (args: {
     salesOrderId: string;
     assignments: { pickerId: string; qty: number }[];
     operatorId: string;
@@ -357,7 +369,7 @@ interface WarehouseState {
   availableOnBay: (sku: string) => number;
   availableInStorage: (sku: string) => number;
   availableInProduction: (sku: string) => number;
-  requestTopUp: (salesOrderId: string) => Result<{ task: PickTask }>;
+  requestTopUp: (salesOrderId: string, directDispatch?: boolean) => Result<{ task: PickTask }>;
   // Loader pre-plans how much of a sales order goes on a given truck — lets
   // one large order be split across several trucks instead of 1 SO : 1 truck.
   planDispatchAllocation: (args: {
@@ -893,9 +905,25 @@ export const useWarehouseStore = create<WarehouseState>()(
           );
         }
         if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
+
+        // Check if there's a Production Direct Dispatch approval for a sales order
+        // matching this pallet's SKU that isn't fully dispatched yet — freshly
+        // produced pallets have no pick task yet, so match by SKU like the rest
+        // of the direct-dispatch flow (e.g. generateManifestForPickingComplete).
+        const load = state0.loads.find((l) => l.palletId === palletId);
+        const hasProductionDirectApproval = !!load && state0.directDispatchApprovals.some((a) => {
+          if (a.source !== 'Production' || a.status !== 'Approved') return false;
+          const so = state0.salesOrders.find((s) => s.id === a.salesOrderId);
+          return !!so && so.sku === load.sku && so.dispatchedQty < so.qty;
+        });
+
+        const isDirectDispatch = !!hasProductionDirectApproval;
+        const newStatus = isDirectDispatch ? 'InTransitToTruck' : 'InTransitToStorage';
+        const destination = isDirectDispatch ? 'Dispatch (Production Direct)' : 'InTransit to Storage';
+
         set((state) => ({
           pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: 'InTransitToStorage', location: { type: 'InTransit' } } : p,
+            p.id === palletId ? { ...p, status: newStatus, location: { type: 'InTransit' } } : p,
           ),
           movements: [
             ...state.movements,
@@ -903,12 +931,19 @@ export const useWarehouseStore = create<WarehouseState>()(
               id: generateMovementId(),
               palletId,
               from: 'Line',
-              to: 'InTransit',
+              to: destination,
               timestamp: new Date().toISOString(),
               operatorId,
             },
           ],
         }));
+
+        if (isDirectDispatch) {
+          get().pushToast(
+            `Pallet ${palletId} routed directly to dispatch per Production Direct approval`,
+            'success',
+          );
+        }
         return ok(undefined);
       },
 
@@ -1035,6 +1070,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             items,
             status: 'Accepted',
             assignedPickerId: a.pickerId,
+            directDispatch: false,
             createdAt: new Date().toISOString(),
           };
           tasks.push(task);
@@ -1089,6 +1125,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           items,
           status: availablePicker ? 'Accepted' : 'PendingAcceptance',
           assignedPickerId: availablePicker?.id ?? null,
+          directDispatch: false,
           createdAt: now,
         };
         set((state) => ({
@@ -1137,7 +1174,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const updatedItems = task.items.map((i) => (i.palletId === palletId ? { ...i, picked: true } : i));
 
         // Direct-dispatch (approved shortfall) top-ups bypass the Loading Bay entirely (spec §17)
-        const isDirectDispatch = task.origin === 'Bay-Topup';
+        const isDirectDispatch = task.directDispatch;
         const taskCompleted = updatedItems.every((i) => i.picked);
 
         set((state) => ({
@@ -1204,10 +1241,11 @@ export const useWarehouseStore = create<WarehouseState>()(
           return err(`Pallet ${palletId} must be in storage (Racked) to be released — current status: ${pallet.status}`);
         }
 
+        const isDirectDispatch = task.directDispatch;
         set((state) => ({
           pallets: state.pallets.map((p) =>
             p.id === palletId
-              ? { ...p, status: 'InTransitToBay' }
+              ? { ...p, status: isDirectDispatch ? 'InTransitToTruck' : 'InTransitToBay' }
               : p,
           ),
           movements: [
@@ -1216,13 +1254,16 @@ export const useWarehouseStore = create<WarehouseState>()(
               id: generateMovementId(),
               palletId,
               from: `Rack ${item.sourceRackId}`,
-              to: 'InTransit to Bay',
+              to: isDirectDispatch ? 'Dispatch (Direct)' : 'InTransit to Bay',
               timestamp: new Date().toISOString(),
               operatorId,
             },
           ],
         }));
-        get().pushToast(`Pallet ${palletId} released from storage — en route to bay`, 'success');
+        const message = isDirectDispatch
+          ? `Pallet ${palletId} released directly to dispatch — bypassing the loading bay`
+          : `Pallet ${palletId} released from storage — en route to bay`;
+        get().pushToast(message, 'success');
         get().enqueueSapSync('PickMovement', `Pallet ${palletId} released from storage`);
         return ok(undefined);
       },
@@ -1325,6 +1366,61 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok(undefined);
       },
 
+      scanPalletArrivedForDirectDispatch: ({ palletId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:scan')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
+        }
+        const pallet = state.pallets.find((p) => p.id === palletId);
+        if (!pallet) return err(`Pallet "${palletId}" not found`);
+        if (pallet.status !== 'InTransitToTruck') {
+          return err(`Pallet ${palletId} is not a direct-dispatch pallet in transit (status: ${pallet.status})`);
+        }
+        if (pallet.directDispatchArrivedAt) {
+          return err(`Pallet ${palletId} arrival was already confirmed`);
+        }
+        if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
+
+        const load = state.loads.find((l) => l.palletId === palletId);
+        const matchedSo = load
+          ? state.salesOrders.find((s) => {
+              if (s.sku !== load.sku || !s.assignedTruckId) return false;
+              return state.directDispatchApprovals.some(
+                (a) => a.salesOrderId === s.id && a.status === 'Approved',
+              );
+            })
+          : undefined;
+        const truck = matchedSo?.assignedTruckId
+          ? state.trucks.find((t) => t.id === matchedSo.assignedTruckId)
+          : undefined;
+        const dispatchLine = truck?.dispatchLine ?? null;
+
+        const now = new Date().toISOString();
+        set((state) => ({
+          pallets: state.pallets.map((p) =>
+            p.id === palletId ? { ...p, directDispatchArrivedAt: now } : p,
+          ),
+          movements: [
+            ...state.movements,
+            {
+              id: generateMovementId(),
+              palletId,
+              from: 'InTransit',
+              to: 'Loading Bay (Direct Dispatch Arrival)',
+              timestamp: now,
+              operatorId,
+            },
+          ],
+        }));
+        get().pushToast(
+          dispatchLine
+            ? `✓ Pallet ${palletId} arrived — take it straight to ${dispatchLine}`
+            : `✓ Pallet ${palletId} arrived — take it straight to dispatch`,
+          'success',
+        );
+        return ok({ dispatchLine });
+      },
+
       assignDispatchPickingTasks: ({ salesOrderId, assignments }) => {
         const state = get();
         if (!can(state.currentUser?.role, 'plan:dispatch')) {
@@ -1381,6 +1477,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             items,
             status: 'Accepted',
             assignedPickerId: a.pickerId,
+            directDispatch: false,
             createdAt: new Date().toISOString(),
           };
           tasks.push(task);
@@ -1388,6 +1485,77 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         get().pushToast(
           `Assigned ${tasks.length} picker(s) for dispatch: ${assignments
+            .map((a) => `${USERS.find((u) => u.id === a.pickerId)?.name ?? a.pickerId} (${a.qty} units)`)
+            .join(', ')}`,
+          'success',
+        );
+        return ok({ tasks });
+      },
+
+      assignStorageDirectDispatchTasks: ({ salesOrderId, assignments, operatorId: _operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'plan:dispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot assign pickers — requires Loader`);
+        }
+        const so = state.salesOrders.find((s) => s.id === salesOrderId);
+        if (!so) return err(`Sales order "${salesOrderId}" not found`);
+        if (assignments.length === 0) return err('Assign at least one picker');
+
+        const productDept = PRODUCTS.find((p) => p.sku === so.sku)?.department;
+        for (const a of assignments) {
+          if (a.qty <= 0) return err('Each picker\'s quantity must be greater than zero');
+          const picker = USERS.find((u) => u.id === a.pickerId);
+          if (!picker || picker.role !== 'Picker') return err(`"${a.pickerId}" is not a valid Picker`);
+          if (productDept && picker.department !== productDept) {
+            return err(
+              `Picker ${picker.name} is in ${picker.department}, but ${so.productName} is in ${productDept} — cannot cross-assign`,
+            );
+          }
+        }
+
+        // Check storage has stock
+        const inStorageQty = state.racks.reduce((sum, r) => {
+          const palletIds = r.slots.filter((s) => s.palletId).map((s) => s.palletId!) as string[];
+          return sum + palletIds.reduce((slotSum, pId) => {
+            const load = state.loads.find((l) => l.palletId === pId);
+            return load && load.sku === so.sku ? slotSum + load.quantity : slotSum;
+          }, 0);
+        }, 0);
+
+        const totalRequested = assignments.reduce((sum, a) => sum + a.qty, 0);
+        if (totalRequested > inStorageQty) {
+          return err(
+            inStorageQty <= 0
+              ? `No stock in storage for ${salesOrderId}`
+              : `Only ${inStorageQty.toLocaleString()} units in storage; cannot pick ${totalRequested.toLocaleString()} units`,
+          );
+        }
+
+        const tasks: PickTask[] = [];
+        for (const a of assignments) {
+          const liveState = get();
+          // Select from storage for direct dispatch
+          const items = selectFifoPickItems(liveState, so.sku, a.qty);
+          if (items.length === 0) {
+            return err(
+              `Ran out of storage stock for SKU ${so.sku} while assigning ${a.pickerId} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
+            );
+          }
+          const task: PickTask = {
+            id: generatePickTaskId(),
+            salesOrderId,
+            origin: 'Storage',
+            items,
+            status: 'Accepted',
+            assignedPickerId: a.pickerId,
+            directDispatch: true,  // Key flag: this bypasses staging
+            createdAt: new Date().toISOString(),
+          };
+          tasks.push(task);
+          set((s) => ({ pickTasks: [...s.pickTasks, task] }));
+        }
+        get().pushToast(
+          `Assigned ${tasks.length} storage picker(s) for direct dispatch: ${assignments
             .map((a) => `${USERS.find((u) => u.id === a.pickerId)?.name ?? a.pickerId} (${a.qty} units)`)
             .join(', ')}`,
           'success',
@@ -1509,7 +1677,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           }, 0);
       },
 
-      requestTopUp: (salesOrderId) => {
+      requestTopUp: (salesOrderId, directDispatch = false) => {
         const state = get();
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
@@ -1553,6 +1721,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           items,
           status: 'PendingAcceptance',
           assignedPickerId: null,
+          directDispatch,
           createdAt: new Date().toISOString(),
         };
         set((state) => ({ pickTasks: [...state.pickTasks, task] }));
@@ -1685,26 +1854,38 @@ export const useWarehouseStore = create<WarehouseState>()(
           if (shortfall <= 0) return err('Bay already holds enough stock — no direct dispatch needed');
         }
 
-        const existing = state.directDispatchApprovals.find(
-          (a) => a.salesOrderId === salesOrderId && a.status === 'PendingApproval' && a.source === source,
-        );
-        if (existing) return ok({ approval: existing });
-
+        // Auto-approve and execute immediately (no manager approval needed)
         const approval: DirectDispatchApproval = {
           id: generateApprovalId(),
           salesOrderId,
           shortfallQty: shortfall,
           requestedByUserId: operatorId,
           requestedAt: new Date().toISOString(),
-          status: 'PendingApproval',
-          approvedByUserId: null,
-          approvedAt: null,
+          status: 'Approved',
+          approvedByUserId: operatorId,
+          approvedAt: new Date().toISOString(),
           source,
         };
         set((state) => ({ directDispatchApprovals: [...state.directDispatchApprovals, approval] }));
+        get().enqueueSapSync(
+          'DirectDispatchApproved',
+          `Direct dispatch from ${source} requested for ${approval.salesOrderId} — ${approval.shortfallQty} units`,
+        );
+
+        if (source === 'Production') {
+          get().pushToast(
+            `Direct dispatch from Production approved for ${salesOrderId} — system will recommend dispatch for upcoming pallets until fulfilled`,
+            'success',
+          );
+          return ok({ approval });
+        }
+
+        // For Storage source, the Loader assigns Storage Pickers directly
+        // (assignStorageDirectDispatchTasks) — this just records the approval
+        // for tracking/UI display, it does not create its own pick task.
         get().pushToast(
-          `Direct dispatch from ${source} requested for ${salesOrderId} (${shortfall} units) — awaiting HOD/Manager/Director approval`,
-          'info',
+          `Direct dispatch from Storage approved for ${salesOrderId} — ${shortfall.toLocaleString()} units — assign Storage Pickers to pick it`,
+          'success',
         );
         return ok({ approval });
       },
@@ -1863,7 +2044,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           return ok({ verification: existing });
         }
 
-        // Find pallets that are either staged for dispatch OR on bay ready to be picked
+        // Find pallets that are either staged for dispatch, on bay, or in direct dispatch
         const readyPallets = state.pallets.filter((p) => {
           const load = state.loads.find((l) => l.palletId === p.id);
           if (!load || load.sku !== so.sku) return false;
@@ -1875,6 +2056,10 @@ export const useWarehouseStore = create<WarehouseState>()(
 
           // Include on-bay pallets that haven't been assigned to another truck yet
           if (p.status === 'OnBay') return true;
+
+          // Direct dispatch pallets (bypassing bay staging) only count as ready
+          // once the picker has confirmed physical arrival at the loading bay
+          if (p.status === 'InTransitToTruck') return !!p.directDispatchArrivedAt;
 
           return false;
         });
@@ -1943,6 +2128,12 @@ export const useWarehouseStore = create<WarehouseState>()(
         };
         set((state) => ({
           dispatchVerifications: [...state.dispatchVerifications, verification],
+          pallets: state.pallets.map((p) => {
+            if (palletIds.includes(p.id) && p.status === 'InTransitToTruck') {
+              return { ...p, status: 'StagedForDispatch', location: { type: 'DispatchLine', dispatchLine: truck.dispatchLine, truckId: so.assignedTruckId! } };
+            }
+            return p;
+          }),
         }));
         get().pushToast(
           `Manifest generated for ${salesOrderId} — ${pickedQty.toLocaleString()} units ready to stage`,

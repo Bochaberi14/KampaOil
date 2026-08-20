@@ -162,6 +162,10 @@ export interface Pallet {
   recommendedBayLocation?: {
     rackId: string;
   };
+  // Set when a direct-dispatch pallet (InTransitToTruck) has been scanned as
+  // arrived at the loading bay — it skips staging, but still needs this
+  // physical checkpoint before a manifest can be generated for it.
+  directDispatchArrivedAt?: string;
 }
 
 // A line has no fixed product — it runs whatever the operator scans onto it
@@ -307,6 +311,7 @@ export interface PickTask {
   items: PickTaskItem[];
   status: 'PendingAcceptance' | 'Accepted' | 'Completed';
   assignedPickerId: string | null;
+  directDispatch: boolean;  // true for storage/production direct dispatch (skip staging, route to dispatch line)
   createdAt: string;
 }
 

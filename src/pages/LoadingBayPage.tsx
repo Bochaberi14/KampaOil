@@ -21,6 +21,7 @@ export function LoadingBayPage() {
   const requestStockFromStorageToLoadingBay = useWarehouseStore((s) => s.requestStockFromStorageToLoadingBay);
   const scanPalletLeavingStorage = useWarehouseStore((s) => s.scanPalletLeavingStorage);
   const placePalletInBay = useWarehouseStore((s) => s.placePalletInBay);
+  const scanPalletArrivedForDirectDispatch = useWarehouseStore((s) => s.scanPalletArrivedForDirectDispatch);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
@@ -31,6 +32,8 @@ export function LoadingBayPage() {
     palletIndex: 0,
     bayRackId: null,
   });
+
+  const [lastDirectDispatchArrival, setLastDirectDispatchArrival] = useState<{ palletId: string; dispatchLine: string | null } | null>(null);
 
   const [dispatchWizard, setDispatchWizard] = useState<{
     step: DispatchStep;
@@ -49,6 +52,11 @@ export function LoadingBayPage() {
   const [stagingRequest, setStagingRequest] = useState({ sku: '', qty: '' });
 
   const palletsInTransitToBay = useWarehouseStore((s) => s.pallets).filter((p) => p.status === 'InTransitToBay');
+  // Direct-dispatch pallets (Storage or Production Direct) bypass staging but
+  // still need one arrival scan at the bay before heading to dispatch.
+  const palletsAwaitingDirectDispatchArrival = useWarehouseStore((s) => s.pallets).filter(
+    (p) => p.status === 'InTransitToTruck' && !p.directDispatchArrivedAt,
+  );
   const isLoadingBayPicker = currentUser ? getPickerType(currentUser.id) === 'loading-bay' : false;
   const myPutAwayTasks = pickTasks.filter(
     (t) => t.status === 'Accepted' && t.assignedPickerId === currentUser?.id && (t.origin === 'Storage' || t.origin === 'Production'),
@@ -56,7 +64,7 @@ export function LoadingBayPage() {
   const currentPutAwayTask = myPutAwayTasks[0] ?? null;
 
   const currentPutAwayItem = currentPutAwayTask?.items.find((item) => !item.picked) ?? null;
-  const nextPalletToReceive = palletsInTransitToBay[0];
+  const nextPalletToReceive = palletsInTransitToBay[0] ?? palletsAwaitingDirectDispatchArrival[0];
 
   const getStorageInventoryByProduct = () => {
     const inv: Record<string, { sku: string; name: string; count: number }> = {};
@@ -137,8 +145,25 @@ export function LoadingBayPage() {
       return;
     }
 
-    // If there's a put-away task, scan through the task
-    if (currentPutAwayTask && currentPutAwayItem) {
+    const scannedPallet = pallets.find((p) => p.id === palletId);
+
+    // Direct dispatch (Storage or Production Direct): confirm arrival only —
+    // no destination rack, take it straight to dispatch instead.
+    if (scannedPallet?.status === 'InTransitToTruck') {
+      const result = scanPalletArrivedForDirectDispatch({ palletId, operatorId: currentUser.id });
+      if (!result.ok) {
+        pushToast(result.error, 'error');
+        return;
+      }
+      setLastDirectDispatchArrival({ palletId, dispatchLine: result.data.dispatchLine });
+      setWizard({ step: 'bay-arriving', palletId: null, palletIndex: 0, bayRackId: null });
+      return;
+    }
+
+    setLastDirectDispatchArrival(null);
+
+    // If there's a put-away task from storage, mark item as picked
+    if (currentPutAwayTask && currentPutAwayItem && currentPutAwayTask.origin === 'Storage') {
       const result = scanPalletLeavingStorage({
         pickTaskId: currentPutAwayTask.id,
         palletId,
@@ -412,19 +437,40 @@ export function LoadingBayPage() {
             <StepDot active={wizard.step === 'bay-staging'} label="2. Scan destination rack" />
           </div>
 
-          {wizard.step === 'bay-arriving' && (currentPutAwayItem || nextPalletToReceive) && (
-            <>
-              <p className="text-sm text-slate-300">
-                Pallet <span className="font-mono font-semibold text-slate-100">{currentPutAwayItem?.palletId || nextPalletToReceive?.id}</span> from storage — scan to confirm arrival
+          {wizard.step === 'bay-arriving' && lastDirectDispatchArrival && (
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                ⚡ Move direct to dispatch
               </p>
-              <ScanInput
-                label="Scan pallet arriving at loading bay"
-                placeholder="e.g. PLT-005"
-                onScan={handleScanPalletArriving}
-                suggestions={[currentPutAwayItem?.palletId || nextPalletToReceive?.id || '']}
-              />
-            </>
+              <p className="text-xs text-amber-100">
+                Pallet <span className="font-mono font-semibold">{lastDirectDispatchArrival.palletId}</span> has
+                arrived — no rack, take it straight to{' '}
+                {lastDirectDispatchArrival.dispatchLine ?? 'the dispatch line'}.
+              </p>
+            </div>
           )}
+
+          {wizard.step === 'bay-arriving' && (currentPutAwayItem || nextPalletToReceive) && (() => {
+            const expectedId = currentPutAwayItem?.palletId || nextPalletToReceive?.id;
+            const expectedPallet = expectedId ? pallets.find((p) => p.id === expectedId) : undefined;
+            const isDirect = expectedPallet?.status === 'InTransitToTruck';
+            return (
+              <>
+                <p className="text-sm text-slate-300">
+                  Pallet <span className="font-mono font-semibold text-slate-100">{expectedId}</span>{' '}
+                  {isDirect
+                    ? '— ⚡ scan to confirm arrival, then move direct to dispatch (no staging)'
+                    : 'from storage — scan to confirm arrival, then move to the correct rack destination'}
+                </p>
+                <ScanInput
+                  label="Scan pallet arriving at loading bay"
+                  placeholder="e.g. PLT-005"
+                  onScan={handleScanPalletArriving}
+                  suggestions={[expectedId || '']}
+                />
+              </>
+            );
+          })()}
 
           {wizard.step === 'bay-staging' && wizard.palletId && (() => {
             const pallet = pallets.find((p) => p.id === wizard.palletId);

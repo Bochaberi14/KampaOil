@@ -28,6 +28,8 @@ export function ProductionPage() {
   const lines = useWarehouseStore((s) => s.lines);
   const pallets = useWarehouseStore((s) => s.pallets);
   const productionOrders = useWarehouseStore((s) => s.productionOrders);
+  const salesOrders = useWarehouseStore((s) => s.salesOrders);
+  const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
   const scanLine = useWarehouseStore((s) => s.scanLine);
   const scanProductForLine = useWarehouseStore((s) => s.scanProductForLine);
   const scanPalletForLoad = useWarehouseStore((s) => s.scanPalletForLoad);
@@ -39,6 +41,7 @@ export function ProductionPage() {
   const [selectedLine, setSelectedLine] = useState<Line | null>(null);
   const [selectedPO, setSelectedPO] = useState<ProductionOrder | null>(null);
   const [lastRecommendation, setLastRecommendation] = useState<StorageRecommendation | null>(null);
+  const [lastPalletIsDirectDispatch, setLastPalletIsDirectDispatch] = useState(false);
 
   const emptyPallets = pallets.filter((p) => p.status === 'Empty').map((p) => p.id);
   const openSkusForLine = selectedLine
@@ -90,10 +93,21 @@ export function ProductionPage() {
       return;
     }
 
-    // Get the pallet to retrieve the recommended storage location
+    // This pallet's SKU may be covered by an approved Production Direct
+    // order — if so it'll skip storage entirely, so don't show a storage
+    // recommendation the picker would otherwise (wrongly) act on.
+    const isDirectDispatch = directDispatchApprovals.some((a) => {
+      if (a.source !== 'Production' || a.status !== 'Approved') return false;
+      const so = salesOrders.find((s) => s.id === a.salesOrderId);
+      return !!so && so.sku === selectedPO.sku && so.dispatchedQty < so.qty;
+    });
+    setLastPalletIsDirectDispatch(isDirectDispatch);
+
     const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
-    if (updatedPallet?.recommendedStorageLocation) {
+    if (!isDirectDispatch && updatedPallet?.recommendedStorageLocation) {
       setLastRecommendation(updatedPallet.recommendedStorageLocation);
+    } else {
+      setLastRecommendation(null);
     }
 
     if (confirmResult.data.poComplete) {
@@ -101,6 +115,7 @@ export function ProductionPage() {
       setSelectedLine(null);
       setSelectedPO(null);
       setLastRecommendation(null);
+      setLastPalletIsDirectDispatch(false);
     } else {
       setStep('pallet');
     }
@@ -170,7 +185,41 @@ export function ProductionPage() {
                 />
               </div>
 
-              {lastRecommendation && (
+              {(() => {
+                const productionDirectApprovals = directDispatchApprovals.filter(
+                  (a) => a.source === 'Production' && a.status === 'Approved'
+                );
+                if (productionDirectApprovals.length > 0) {
+                  const orders = productionDirectApprovals
+                    .map((a) => salesOrders.find((s) => s.id === a.salesOrderId))
+                    .filter(Boolean) as any[];
+                  return (
+                    <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                        ⚡ Production Direct Dispatch Active
+                      </p>
+                      <p className="text-xs text-amber-100">
+                        Upcoming pallets will route directly to dispatch for: {orders.map((o) => o.id).join(', ')}
+                      </p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {lastPalletIsDirectDispatch && (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                    ⚡ Move direct to dispatch
+                  </p>
+                  <p className="text-xs text-amber-100">
+                    Do not move this pallet to storage — a Storage Picker will scan it leaving the line, then
+                    confirm arrival at the loading bay, then straight to dispatch.
+                  </p>
+                </div>
+              )}
+
+              {!lastPalletIsDirectDispatch && lastRecommendation && (
                 <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4 text-sm">
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300 mb-2">
                     ✓ Move to
