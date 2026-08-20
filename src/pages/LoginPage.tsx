@@ -273,9 +273,9 @@ export function LoginPage() {
               </div>
 
               <div className="mt-6">
-                <div className="rounded-lg border border-amber-800 bg-amber-950/30 px-4 py-3">
-                  <div className="text-xs font-medium text-amber-300">🔐 Multi-Factor Authentication</div>
-                  <p className="mt-2 text-xs text-amber-200/80">
+                <div className="rounded-lg border border-indigo-800 bg-indigo-950/30 px-4 py-3">
+                  <div className="text-xs font-medium text-indigo-300">🔐 Multi-Factor Authentication</div>
+                  <p className="mt-2 text-xs text-indigo-200/80">
                     Enter the 6-digit code from your authenticator app or SMS.
                   </p>
                 </div>

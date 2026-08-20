@@ -32,7 +32,6 @@ import type {
   Zone,
 } from '../types/domain';
 import {
-  DISPATCH_LINE,
   EXCEPTION_LINE_ID,
   INITIAL_BATCHES,
   INITIAL_BAY_RACKS,
@@ -404,6 +403,7 @@ interface WarehouseState {
     salesOrderId: string;
     plate: string;
     driverName: string;
+    dispatchLine: string;
     operatorId: string;
   }) => Result<{ truck: Truck }>;
   // Picking-complete verification — the Picker scans LINE 001 once every
@@ -1987,7 +1987,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ truck });
       },
 
-      registerVehicleForSalesOrder: ({ salesOrderId, plate, driverName, operatorId }) => {
+      registerVehicleForSalesOrder: ({ salesOrderId, plate, driverName, dispatchLine, operatorId }) => {
         const state = get();
         if (!can(state.currentUser?.role, 'plan:dispatch')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot register a vehicle — requires Loader`);
@@ -1999,6 +1999,10 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         if (!plate.trim()) return err('Vehicle registration is required');
         if (!driverName.trim()) return err('Driver name is required');
+        if (!dispatchLine.trim()) return err('Dispatch line is required');
+        if (state.trucks.some((t) => t.dispatchLine === dispatchLine)) {
+          return err(`Dispatch line ${dispatchLine} is already occupied by another vehicle`);
+        }
 
         const dispatchBarcode = generateVehicleBarcodeId();
         const truck: Truck = {
@@ -2008,7 +2012,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           dispatchBarcode,
           status: 'Waiting',
           salesOrderId,
-          dispatchLine: DISPATCH_LINE,
+          dispatchLine,
         };
         set((state) => ({
           trucks: [...state.trucks, truck],

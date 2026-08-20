@@ -199,11 +199,11 @@ export function StoragePage() {
           {wizard.step === 'pallet-arriving' && (
           <>
             {lastArrivedDirectDispatch && (
-              <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+              <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-4 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
                   ⚡ Move direct to dispatch
                 </p>
-                <p className="text-xs text-amber-100">
+                <p className="text-xs text-green-100">
                   Pallet <span className="font-mono font-semibold">{lastArrivedDirectDispatch}</span> is not going to a
                   rack — take it to the loading bay, scan its arrival there, then straight to dispatch.
                 </p>
@@ -293,8 +293,8 @@ export function StoragePage() {
                 </div>
 
                 {activePicking.directDispatch && (
-                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
-                    <p className="text-xs text-amber-300 font-medium">
+                  <div className="rounded-lg bg-blue-800/30 border border-blue-700 px-3 py-2">
+                    <p className="text-xs text-blue-200 font-medium">
                       ⚡ DIRECT DISPATCH: Pallets go directly to dispatch line, bypassing staging
                     </p>
                   </div>

@@ -216,6 +216,7 @@ export function LoaderPage() {
       salesOrderId: selectedSO.id,
       plate,
       driverName,
+      dispatchLine,
       operatorId: currentUser.id,
     });
     if (!result.ok) {

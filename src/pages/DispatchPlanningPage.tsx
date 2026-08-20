@@ -131,8 +131,18 @@ export function DispatchPlanningPage() {
     setStoragePickerRows((rows) => rows.filter((_, i) => i !== index));
   }
 
-  function handleAssignPickers() {
-    if (!selectedSO || !currentUser) return;
+  function handleAssignPickers(): boolean {
+    if (!selectedSO || !currentUser) return false;
+
+    // Every row that has a picker OR a qty must have both — no half-filled rows
+    const incomplete = [...pickerRows, ...storagePickerRows].some(
+      (r) => (r.pickerId && !r.qty) || (!r.pickerId && r.qty),
+    );
+    if (incomplete) {
+      pushToast('Enter a quantity for every picker you selected (or remove the empty row)', 'error');
+      return false;
+    }
+
     const bayAssignments = pickerRows
       .filter((r) => r.pickerId && r.qty)
       .map((r) => ({ pickerId: r.pickerId, qty: Number(r.qty) }));
@@ -143,7 +153,7 @@ export function DispatchPlanningPage() {
     const allAssignments = [...bayAssignments, ...storageAssignments];
     if (allAssignments.length === 0) {
       pushToast('Add at least one picker', 'error');
-      return;
+      return false;
     }
 
     // Check for duplicate pickers
@@ -154,7 +164,7 @@ export function DispatchPlanningPage() {
         `Cannot assign the same picker twice. Duplicate: ${USERS.find((u) => u.id === duplicates[0])?.name || duplicates[0]}`,
         'error',
       );
-      return;
+      return false;
     }
 
     // Validate bay assignments
@@ -166,7 +176,7 @@ export function DispatchPlanningPage() {
           `Cannot assign ${totalAssigned} units — only ${bayAvailable.toLocaleString()} units available in Loading Bay`,
           'error',
         );
-        return;
+        return false;
       }
     }
 
@@ -179,7 +189,7 @@ export function DispatchPlanningPage() {
       });
       if (!storageResult.ok) {
         pushToast(storageResult.error, 'error');
-        return;
+        return false;
       }
     }
 
@@ -192,13 +202,14 @@ export function DispatchPlanningPage() {
       });
       if (!bayResult.ok) {
         pushToast(bayResult.error, 'error');
-        return;
+        return false;
       }
     }
 
     pushToast(`Assigned ${allAssignments.length} picker(s)`, 'success');
     setPickerRows([{ pickerId: '', qty: '' }]);
     setStoragePickerRows([]);
+    return true;
   }
 
   function handleRegisterVehicle() {
@@ -207,10 +218,15 @@ export function DispatchPlanningPage() {
       pushToast('Enter plate and driver name', 'error');
       return;
     }
+    if (!dispatchLine) {
+      pushToast('Allocate a dispatch line first', 'error');
+      return;
+    }
     const result = registerVehicleForSalesOrder({
       salesOrderId: selectedSO.id,
       plate,
       driverName,
+      dispatchLine,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
@@ -402,8 +418,22 @@ function DispatchOrderPanel({
   setSelectedDirectDispatchSource,
 }: any) {
   const trucks = useWarehouseStore((s) => s.trucks);
+  const pallets = useWarehouseStore((s) => s.pallets);
+  const loads = useWarehouseStore((s) => s.loads);
   const assignedTruck = order.assignedTruckId ? trucks.find((t) => t.id === order.assignedTruckId) : undefined;
   const bucket = orderBucket(order);
+
+  const productionApproval = directDispatchApprovals.find(
+    (a: any) => a.salesOrderId === order.id && a.source === 'Production' && a.status === 'Approved',
+  );
+  const productionDirectPallets = productionApproval
+    ? pallets.filter(
+        (p: any) => p.status === 'InTransitToTruck' && loads.find((l: any) => l.palletId === p.id)?.sku === order.sku,
+      )
+    : [];
+  const productionArrived = productionDirectPallets.filter((p: any) => p.directDispatchArrivedAt);
+
+  const hasAnyPickingActivity = soPickTasks.length > 0 || !!productionApproval;
 
   return (
     <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 max-h-[calc(100vh-200px)] overflow-y-auto">
@@ -436,8 +466,14 @@ function DispatchOrderPanel({
           <div className="space-y-2">
             <label className="block text-xs font-medium text-slate-300">Select Dispatch Line</label>
             {dispatchLine ? (
-              <div className="w-full rounded bg-emerald-900/30 border border-emerald-500/50 px-3 py-2 text-sm text-emerald-100 font-medium">
-                ✓ {dispatchLine}
+              <div className="flex items-center justify-between gap-2 w-full rounded bg-emerald-900/30 border border-emerald-500/50 px-3 py-2 text-sm text-emerald-100 font-medium">
+                <span>✓ {dispatchLine}</span>
+                <button
+                  onClick={() => setDispatchLine('')}
+                  className="text-xs font-normal text-emerald-300 underline hover:text-emerald-200"
+                >
+                  Change
+                </button>
               </div>
             ) : (
               <select
@@ -457,16 +493,16 @@ function DispatchOrderPanel({
 
       {/* STEP 1.5: Dispatch Line Required Message */}
       {!dispatchLine && soPickTasks.length === 0 && order.releasedQty === 0 && (
-        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 mt-4">
-          <p className="text-xs text-amber-300 font-medium">⚠ Dispatch Line Required</p>
-          <p className="text-xs text-amber-200 mt-1">You must allocate a dispatch line in Step 1 before proceeding.</p>
+        <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-3 mt-4">
+          <p className="text-xs text-slate-300 font-medium">Dispatch Line Required</p>
+          <p className="text-xs text-slate-400 mt-1">You must allocate a dispatch line in Step 1 before proceeding.</p>
         </div>
       )}
 
       {/* STEP 2: Register Vehicle (moved here - after dispatch line, before release) */}
       {dispatchLine && !assignedTruck && soPickTasks.length === 0 && order.releasedQty === 0 && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-orange-400">Step 2: Register Vehicle</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 2: Register Vehicle</p>
           <div className="space-y-2">
             <input
               type="text"
@@ -493,7 +529,7 @@ function DispatchOrderPanel({
             <button
               onClick={handleRegisterVehicle}
               disabled={!plate.trim() || !driverName.trim() || !plateConfirmed}
-              className="w-full rounded bg-orange-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-orange-700"
+              className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 hover:bg-blue-700"
             >
               Register Vehicle
             </button>
@@ -506,20 +542,28 @@ function DispatchOrderPanel({
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Steps 3 & 4: Release Quantity + Assign Pickers</p>
 
-          {/* Stock Availability - Top for guidance */}
+          {/* Pickers will source from - guidance shown before AND after entering quantity */}
           {order.sku && (
             (() => {
               const bayAvail = availableOnBay(order.sku);
               const storageAvail = availableInStorage(order.sku);
-              const needed = remainingToRelease;
+              const needed = releaseQty ? Number(releaseQty) : remainingToRelease;
+              const fromBay = Math.min(bayAvail, needed);
+              const remainingAfterBay = needed - fromBay;
+              const fromStorage = Math.min(storageAvail, remainingAfterBay);
+              const fromProd = remainingAfterBay - fromStorage;
               return (
-                <div className="rounded-lg bg-slate-800/40 p-3">
-                  <p className="text-xs font-semibold text-slate-300 mb-2">Stock Available:</p>
-                  <div className="space-y-1 text-xs text-slate-400">
-                    <p>• Loading Bay: {bayAvail.toLocaleString()} units</p>
-                    <p>• Storage: {storageAvail.toLocaleString()} units</p>
-                    <p className="text-slate-200 font-medium">Total needed: {needed.toLocaleString()} units</p>
-                  </div>
+                <div className="rounded-lg bg-slate-800/60 p-3 text-xs text-slate-300">
+                  <p className="font-semibold mb-1">Pickers will source from:</p>
+                  <p>• Loading Bay: {bayAvail.toLocaleString()} units available</p>
+                  <p>• Storage: {storageAvail.toLocaleString()} units available</p>
+                  {releaseQty && (
+                    <p className="text-slate-200 font-medium mt-1">
+                      For {needed.toLocaleString()} units: {fromBay.toLocaleString()} from Bay
+                      {fromStorage > 0 && `, ${fromStorage.toLocaleString()} from Storage`}
+                      {fromProd > 0 && `, ${fromProd.toLocaleString()} from Production`}
+                    </p>
+                  )}
                 </div>
               );
             })()
@@ -544,48 +588,63 @@ function DispatchOrderPanel({
             />
           </div>
 
-          {/* Request Direct Dispatch - Always visible when quantity entered */}
+          {/* Request Direct Dispatch - only when the release qty exceeds what's on the bay */}
           {releaseQty && order.sku && (
             (() => {
               const bayAvail = availableOnBay(order.sku);
               const storageAvail = availableInStorage(order.sku);
               const needed = Number(releaseQty);
-              let fromBay = Math.min(bayAvail, needed);
-              let remaining = needed - fromBay;
-              let fromStorage = Math.min(storageAvail, remaining);
-              remaining -= fromStorage;
-              const fromProd = remaining;
+              const shortfall = needed - bayAvail;
+              if (shortfall <= 0) return null;
+
+              const fromStorage = Math.min(storageAvail, shortfall);
+              const fromProd = shortfall - fromStorage;
 
               return (
-                <div className="rounded-lg border border-purple-800/50 bg-purple-900/20 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-purple-300">Request Direct Dispatch:</p>
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={directDispatchRequests.has('Storage')}
-                        onChange={() => {
-                          const newSet = new Set(directDispatchRequests);
-                          if (newSet.has('Storage')) {
-                            newSet.delete('Storage');
-                            if (selectedDirectDispatchSource === 'Storage') {
-                              setSelectedDirectDispatchSource(null);
+                <div className="rounded-lg border border-green-800/50 bg-green-900/20 p-3 space-y-3">
+                  <p className="text-xs font-semibold text-green-300">Direct Dispatch Requests</p>
+
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-green-100">
+                      Bay has {bayAvail.toLocaleString()} units. Need {shortfall.toLocaleString()} more
+                      {fromStorage > 0 ? ' from Storage' : ''} — assign pickers below.
+                    </p>
+                    {fromStorage > 0 && (
+                      <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={directDispatchRequests.has('Storage')}
+                          onChange={() => {
+                            const newSet = new Set(directDispatchRequests);
+                            if (newSet.has('Storage')) {
+                              newSet.delete('Storage');
+                              if (selectedDirectDispatchSource === 'Storage') {
+                                setSelectedDirectDispatchSource(null);
+                              }
+                              setStoragePickerRows([]);
+                            } else {
+                              newSet.add('Storage');
+                              setSelectedDirectDispatchSource('Storage');
+                              if (storagePickerRows.length === 0) {
+                                setStoragePickerRows([{ pickerId: '', qty: '' }]);
+                              }
                             }
-                            setStoragePickerRows([]);
-                          } else {
-                            newSet.add('Storage');
-                            setSelectedDirectDispatchSource('Storage');
-                            if (storagePickerRows.length === 0) {
-                              setStoragePickerRows([{ pickerId: '', qty: '' }]);
-                            }
-                          }
-                          setDirectDispatchRequests(newSet);
-                        }}
-                        className="rounded"
-                      />
-                      Request from Storage: {fromStorage.toLocaleString()} units
-                    </label>
-                    {fromProd > 0 && (
+                            setDirectDispatchRequests(newSet);
+                          }}
+                          className="rounded"
+                        />
+                        Request {fromStorage.toLocaleString()} from Storage
+                      </label>
+                    )}
+                  </div>
+
+                  {fromProd > 0 && (
+                    <div className="space-y-1.5 border-t border-green-800/40 pt-2">
+                      <p className="text-xs text-green-100">
+                        {fromStorage > 0
+                          ? `Storage provides ${fromStorage.toLocaleString()}, need ${fromProd.toLocaleString()} from Production.`
+                          : `Storage is empty — need ${fromProd.toLocaleString()} from Production.`}
+                      </p>
                       <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
                         <input
                           type="checkbox"
@@ -605,10 +664,10 @@ function DispatchOrderPanel({
                           }}
                           className="rounded"
                         />
-                        Request from Production: {fromProd.toLocaleString()} units
+                        Request {fromProd.toLocaleString()} from Production
                       </label>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               );
             })()
@@ -633,33 +692,10 @@ function DispatchOrderPanel({
           {/* Assign Pickers Based on Released Quantity */}
           {releaseQty && (
             <div className="space-y-2">
-              {/* Storage Source Context */}
-              {order.sku && (
-                (() => {
-                  const bayAvail = availableOnBay(order.sku);
-                  const storageAvail = availableInStorage(order.sku);
-                  const needed = Number(releaseQty);
-                  let fromBay = Math.min(bayAvail, needed);
-                  let remaining = needed - fromBay;
-                  let fromStorage = Math.min(storageAvail, remaining);
-                  remaining -= fromStorage;
-                  const fromProd = remaining;
-
-                  return (
-                    <div className="rounded-lg bg-slate-800/60 p-2 text-xs text-slate-300">
-                      <p className="font-semibold mb-1">Pickers will source from:</p>
-                      {fromBay > 0 && <p>• Loading Bay: {fromBay.toLocaleString()} units</p>}
-                      {fromStorage > 0 && <p>• Storage: {fromStorage.toLocaleString()} units</p>}
-                      {fromProd > 0 && <p>• Production: {fromProd.toLocaleString()} units</p>}
-                    </div>
-                  );
-                })()
-              )}
-
               {/* Storage Pickers Section - if Storage is checked */}
               {directDispatchRequests.has('Storage') && (
-                <div className="rounded-lg bg-purple-500/10 border border-purple-500/30 p-3 space-y-2">
-                  <label className="block text-xs font-medium text-purple-200">Storage Pickers for Direct Dispatch</label>
+                <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-3 space-y-2">
+                  <label className="block text-xs font-medium text-green-200">Storage Pickers for Direct Dispatch</label>
                   {storagePickerRows.map((row: any, i: number) => (
                     <div key={i} className="flex gap-2">
                       <select
@@ -715,7 +751,9 @@ function DispatchOrderPanel({
               )}
 
               {/* Loading Bay Pickers Section */}
-              <label className="block text-xs font-medium text-slate-300">Assign Pickers for {releaseQty} units (Loading Bay)</label>
+              <label className="block text-xs font-medium text-slate-300">
+                Assign Pickers — {order.sku ? Math.min(availableOnBay(order.sku), Number(releaseQty)).toLocaleString() : 0} units available on the bay
+              </label>
               {pickerRows.map((row: any, i: number) => (
                 <div key={i} className="flex gap-2">
                   <select
@@ -768,8 +806,9 @@ function DispatchOrderPanel({
               {/* Release Button - Assigns tasks & pickers get notified */}
               <button
                 onClick={() => {
-                  handleAssignPickers();
-                  setTimeout(() => handleRelease(), 300);
+                  if (handleAssignPickers()) {
+                    handleRelease();
+                  }
                 }}
                 className="w-full rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
               >
@@ -780,24 +819,30 @@ function DispatchOrderPanel({
         </div>
       )}
 
-      {/* Show assigned pickers after release */}
-      {soPickTasks.length > 0 && (
-        <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
-          <p className="text-xs font-semibold text-emerald-300 mb-2">✓ Pickers Assigned & Notified:</p>
+      {/* Show dispatch picking progress after release — includes Production Direct */}
+      {hasAnyPickingActivity && (
+        <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 space-y-1">
+          <p className="text-xs font-semibold text-emerald-300 mb-2">Dispatch Picking Progress:</p>
           {soPickTasks.map((task: any) => (
             <p key={task.id} className="text-xs text-emerald-200">
-              • {userName(task.assignedPickerId)} ({task.status})
+              • {userName(task.assignedPickerId)} — {task.origin}
+              {task.directDispatch ? ' (Direct)' : ''} ({task.status})
             </p>
           ))}
+          {productionApproval && (
+            <p className="text-xs text-emerald-200">
+              • Production Direct — {productionArrived.length}/{productionDirectPallets.length} pallet(s) arrived at bay
+            </p>
+          )}
         </div>
       )}
 
-      {/* Generate Manifest after release */}
+      {/* Generate Manifest after release — printable any time, doesn't wait on picking */}
       {assignedTruck && showGenerateButton === order.id && !verification && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 5: Generate Dispatch Documents</p>
           <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
-            <p className="text-sm text-emerald-300">✓ Products released and pickers assigned! Generate dispatch documents to print barcode and manifest.</p>
+            <p className="text-sm text-emerald-300">✓ Products released! Generate dispatch documents to print barcode and manifest.</p>
           </div>
           <button
             onClick={() => handleGenerateManifest(order.id)}

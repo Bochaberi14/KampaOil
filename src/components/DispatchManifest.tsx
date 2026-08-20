@@ -42,7 +42,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
         <h2 className="font-semibold mb-3 border-b border-black pb-2">Products Being Dispatched</h2>
         <div className="space-y-3">
           {verification.products.map((product) => {
-            const pallets = Math.ceil(product.pickedQty / unitsPerPallet(product.sku));
+            const pallets = Math.ceil(product.releasedQty / unitsPerPallet(product.sku));
             return (
               <div key={product.sku} className="grid grid-cols-4 gap-4 text-sm py-2 border-b border-gray-300">
                 <div>
@@ -51,7 +51,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
                 </div>
                 <div className="text-right">
                   <p className="font-medium">{pallets} pallets</p>
-                  <p className="text-xs text-gray-600">{product.pickedQty} units</p>
+                  <p className="text-xs text-gray-600">{product.releasedQty} units</p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs">Ordered: {product.orderedQty}</p>
@@ -71,7 +71,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
         <h2 className="font-semibold mb-3 border-b border-black pb-2">Released Items Checklist</h2>
         <div className="space-y-2">
           {verification.products.map((product) => {
-            const pallets = Math.ceil(product.pickedQty / unitsPerPallet(product.sku));
+            const pallets = Math.ceil(product.releasedQty / unitsPerPallet(product.sku));
             return (
               <div key={product.sku} className="flex items-start gap-3 text-sm py-1">
                 <input
@@ -82,7 +82,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
                 <div className="flex-1">
                   <p className="font-medium">{product.productName}</p>
                   <p className="text-xs text-gray-600">
-                    {product.pickedQty} units ({pallets} pallets) of {product.releasedQty} released
+                    {product.releasedQty} units ({pallets} pallets) released — {product.pickedQty} picked so far
                   </p>
                 </div>
               </div>

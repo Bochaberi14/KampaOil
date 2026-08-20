@@ -194,11 +194,11 @@ export function ProductionPage() {
                     .map((a) => salesOrders.find((s) => s.id === a.salesOrderId))
                     .filter(Boolean) as any[];
                   return (
-                    <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                    <div className="rounded-lg bg-green-900/20 border border-green-800/50 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
                         ⚡ Production Direct Dispatch Active
                       </p>
-                      <p className="text-xs text-amber-100">
+                      <p className="text-xs text-green-100">
                         Upcoming pallets will route directly to dispatch for: {orders.map((o) => o.id).join(', ')}
                       </p>
                     </div>
@@ -208,11 +208,11 @@ export function ProductionPage() {
               })()}
 
               {lastPalletIsDirectDispatch && (
-                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+                <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-4 text-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
                     ⚡ Move direct to dispatch
                   </p>
-                  <p className="text-xs text-amber-100">
+                  <p className="text-xs text-green-100">
                     Do not move this pallet to storage — a Storage Picker will scan it leaving the line, then
                     confirm arrival at the loading bay, then straight to dispatch.
                   </p>
