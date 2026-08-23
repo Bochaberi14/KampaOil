@@ -435,6 +435,22 @@ function DispatchOrderPanel({
 
   const hasAnyPickingActivity = soPickTasks.length > 0 || !!productionApproval;
 
+  // Three-stage lifecycle for a direct-dispatch pick task: moving (In
+  // Progress) → arrived at the loading bay (Staged) → dispatch line scanned
+  // (Completed). A task's own 'Completed' status only means "left storage" —
+  // it isn't staged until the pallet is physically confirmed at the bay.
+  function pickTaskDisplayStatus(t: any) {
+    const lineScanned = !!verification?.dispatchLineScannedAt;
+    if (t.origin === 'Storage' && t.directDispatch) {
+      if (t.status !== 'Completed') return t.status;
+      const allArrived = t.items.every((i: any) => pallets.find((p: any) => p.id === i.palletId)?.directDispatchArrivedAt);
+      if (!allArrived) return 'In Progress';
+      return lineScanned ? 'Completed' : 'Staged';
+    }
+    if (t.status === 'Completed') return lineScanned ? 'Completed' : 'Staged';
+    return t.status;
+  }
+
   return (
     <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 max-h-[calc(100vh-200px)] overflow-y-auto">
       {/* Order Summary */}
@@ -826,12 +842,15 @@ function DispatchOrderPanel({
           {soPickTasks.map((task: any) => (
             <p key={task.id} className="text-xs text-emerald-200">
               • {userName(task.assignedPickerId)} — {task.origin}
-              {task.directDispatch ? ' (Direct)' : ''} ({task.status})
+              {task.directDispatch ? ' (Direct)' : ''} ({pickTaskDisplayStatus(task)})
             </p>
           ))}
           {productionApproval && (
             <p className="text-xs text-emerald-200">
               • Production Direct — {productionArrived.length}/{productionDirectPallets.length} pallet(s) arrived at bay
+              {' '}({productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
+                ? (verification?.dispatchLineScannedAt ? 'Completed' : 'Staged')
+                : 'In Progress'})
             </p>
           )}
         </div>

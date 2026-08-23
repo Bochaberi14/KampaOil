@@ -93,17 +93,13 @@ export function ProductionPage() {
       return;
     }
 
-    // This pallet's SKU may be covered by an approved Production Direct
-    // order — if so it'll skip storage entirely, so don't show a storage
-    // recommendation the picker would otherwise (wrongly) act on.
-    const isDirectDispatch = directDispatchApprovals.some((a) => {
-      if (a.source !== 'Production' || a.status !== 'Approved') return false;
-      const so = salesOrders.find((s) => s.id === a.salesOrderId);
-      return !!so && so.sku === selectedPO.sku && so.dispatchedQty < so.qty;
-    });
+    // confirmLoad already decided (and consumed the shortfall) for this exact
+    // pallet — read that recorded decision rather than re-checking the
+    // approval, whose shortfall may already differ by the time this renders.
+    const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
+    const isDirectDispatch = !!updatedPallet?.productionDirectDispatchApprovalId;
     setLastPalletIsDirectDispatch(isDirectDispatch);
 
-    const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
     if (!isDirectDispatch && updatedPallet?.recommendedStorageLocation) {
       setLastRecommendation(updatedPallet.recommendedStorageLocation);
     } else {
@@ -187,7 +183,7 @@ export function ProductionPage() {
 
               {(() => {
                 const productionDirectApprovals = directDispatchApprovals.filter(
-                  (a) => a.source === 'Production' && a.status === 'Approved'
+                  (a) => a.source === 'Production' && a.status === 'Approved' && a.shortfallQty > 0
                 );
                 if (productionDirectApprovals.length > 0) {
                   const orders = productionDirectApprovals

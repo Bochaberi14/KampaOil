@@ -166,6 +166,12 @@ export interface Pallet {
   // arrived at the loading bay — it skips staging, but still needs this
   // physical checkpoint before a manifest can be generated for it.
   directDispatchArrivedAt?: string;
+  // Decided once, at confirmLoad time — which approval (if any) this pallet
+  // is covering. Recorded here so the later scan when it leaves the line
+  // honors this decision instead of re-checking the approval's shortfall,
+  // which may have changed in the meantime (another pallet consuming it,
+  // a new approval being raised).
+  productionDirectDispatchApprovalId?: string | null;
 }
 
 // A line has no fixed product — it runs whatever the operator scans onto it
@@ -432,6 +438,8 @@ export interface DispatchVerification {
   pickerUserIds: string[];
   stagedAt: string;
   stagedByUserId: string;
+  dispatchLineScannedAt: string | null;
+  dispatchLineScannedByUserId: string | null;
   vehicleVerifiedAt: string | null;
   vehicleVerifiedByUserId: string | null;
   driverName: string | null;

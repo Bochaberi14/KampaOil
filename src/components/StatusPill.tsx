@@ -64,6 +64,8 @@ const STYLES: Record<string, string> = {
   // Pick task statuses
   PendingAcceptance: PENDING_ACTION,
   Accepted: MID,
+  'In Progress': PENDING_ACTION,
+  Staged: MID,
 
   // Dispatch verification statuses
   AwaitingVerification: PENDING_ACTION,

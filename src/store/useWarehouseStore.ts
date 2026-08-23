@@ -847,6 +847,17 @@ export const useWarehouseStore = create<WarehouseState>()(
         const newFulfilled = po.fulfilledQty + quantity;
         const poComplete = newFulfilled >= po.targetQty;
 
+        // Decide — once, right now — whether this pallet covers a Production
+        // Direct shortfall, and immediately consume that shortfall. This is
+        // the single source of truth: the pallet carries the decision from
+        // here on, so the later scan when it leaves the line doesn't
+        // re-evaluate against a shortfall that may have since changed.
+        const matchedApproval = state.directDispatchApprovals.find((a) => {
+          if (a.source !== 'Production' || a.status !== 'Approved' || a.shortfallQty <= 0) return false;
+          const so = state.salesOrders.find((s) => s.id === a.salesOrderId);
+          return !!so && so.sku === po.sku;
+        });
+
         set((state) => ({
           loads: [...state.loads, load],
           batches: [...state.batches.filter((b) => b.id !== batch.id), batch],
@@ -875,9 +886,17 @@ export const useWarehouseStore = create<WarehouseState>()(
                   status: 'Loaded',
                   loadId,
                   recommendedStorageLocation: storageRec ?? undefined,
+                  productionDirectDispatchApprovalId: matchedApproval?.id ?? null,
                 }
               : p,
           ),
+          directDispatchApprovals: matchedApproval
+            ? state.directDispatchApprovals.map((a) =>
+                a.id === matchedApproval.id
+                  ? { ...a, shortfallQty: Math.max(0, a.shortfallQty - quantity) }
+                  : a,
+              )
+            : state.directDispatchApprovals,
         }));
 
         get().pushToast(
@@ -906,18 +925,11 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
 
-        // Check if there's a Production Direct Dispatch approval for a sales order
-        // matching this pallet's SKU that isn't fully dispatched yet — freshly
-        // produced pallets have no pick task yet, so match by SKU like the rest
-        // of the direct-dispatch flow (e.g. generateManifestForPickingComplete).
-        const load = state0.loads.find((l) => l.palletId === palletId);
-        const hasProductionDirectApproval = !!load && state0.directDispatchApprovals.some((a) => {
-          if (a.source !== 'Production' || a.status !== 'Approved') return false;
-          const so = state0.salesOrders.find((s) => s.id === a.salesOrderId);
-          return !!so && so.sku === load.sku && so.dispatchedQty < so.qty;
-        });
-
-        const isDirectDispatch = !!hasProductionDirectApproval;
+        // The Production Direct decision was already made — and the
+        // approval's shortfall already consumed — back at confirmLoad time.
+        // Honor that recorded decision rather than re-checking the approval,
+        // whose shortfall may have moved on by now.
+        const isDirectDispatch = !!pallet.productionDirectDispatchApprovalId;
         const newStatus = isDirectDispatch ? 'InTransitToTruck' : 'InTransitToStorage';
         const destination = isDirectDispatch ? 'Dispatch (Production Direct)' : 'InTransit to Storage';
 
@@ -1841,17 +1853,25 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        const remaining = so.qty - so.dispatchedQty;
+        // Capped by released quantity — a direct-dispatch shortfall can't
+        // pull unreleased stock either, same principle as requestTopUp. Using
+        // the full order (so.qty) here would treat everything still unreleased
+        // as "shortfall" too, vastly overstating how much needs to divert.
+        const remaining = so.releasedQty - so.dispatchedQty;
         if (remaining <= 0) return err(`Sales order ${salesOrderId} is already fulfilled`);
 
-        // The Storage bypass only makes sense when the bay is genuinely
-        // short; the Production bypass is a broader exception (diverting
-        // still-Loaded stock straight off the line) with no bay-stock check.
-        let shortfall = remaining;
+        // Shortfall is what's left after everything already available on the
+        // bay and in storage — otherwise the approval would divert far more
+        // pallets than actually needed (e.g. the whole remaining order).
+        const availableOnBayQty = get().availableOnBay(so.sku);
+        let shortfall: number;
         if (source === 'Storage') {
-          const available = get().availableOnBay(so.sku);
-          shortfall = remaining - available;
+          shortfall = remaining - availableOnBayQty;
           if (shortfall <= 0) return err('Bay already holds enough stock — no direct dispatch needed');
+        } else {
+          const availableInStorageQty = get().availableInStorage(so.sku);
+          shortfall = remaining - availableOnBayQty - availableInStorageQty;
+          if (shortfall <= 0) return err('Bay and storage already hold enough stock — no direct dispatch needed');
         }
 
         // Auto-approve and execute immediately (no manager approval needed)
@@ -2122,6 +2142,8 @@ export const useWarehouseStore = create<WarehouseState>()(
           pickerUserIds,
           stagedAt: now,
           stagedByUserId: operatorId,
+          dispatchLineScannedAt: null,
+          dispatchLineScannedByUserId: null,
           vehicleVerifiedAt: null,
           vehicleVerifiedByUserId: null,
           driverName: null,
@@ -2155,7 +2177,7 @@ export const useWarehouseStore = create<WarehouseState>()(
       // never emptied, never "in" the truck — and the handover printout is
       // generated.
       scanDispatchLine: (args) => {
-        const { salesOrderId, dispatchLineCode } = args;
+        const { salesOrderId, dispatchLineCode, operatorId } = args;
         const state = get();
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
@@ -2177,8 +2199,18 @@ export const useWarehouseStore = create<WarehouseState>()(
           return err(`No goods have been staged yet for ${salesOrderId} — generate dispatch documents first`);
         }
 
+        const now = new Date().toISOString();
+        const updated: DispatchVerification = {
+          ...verification,
+          dispatchLineScannedAt: now,
+          dispatchLineScannedByUserId: operatorId,
+        };
+        set((state) => ({
+          dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === updated.id ? updated : v)),
+        }));
+
         get().pushToast(`✓ Dispatch line verified. Ready to scan vehicle barcode.`, 'success');
-        return ok({ verification });
+        return ok({ verification: updated });
       },
 
       // Loader-only: scans the vehicle's own barcode (generated at

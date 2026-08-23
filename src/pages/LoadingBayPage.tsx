@@ -429,7 +429,7 @@ export function LoadingBayPage() {
         </div>
       )}
 
-      {isLoadingBayPicker && (currentPutAwayTask || nextPalletToReceive) && (
+      {isLoadingBayPicker && (currentPutAwayTask || nextPalletToReceive || lastDirectDispatchArrival) && (
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-lg font-semibold text-slate-200">Intake Workflow</h2>
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
@@ -438,13 +438,13 @@ export function LoadingBayPage() {
           </div>
 
           {wizard.step === 'bay-arriving' && lastDirectDispatchArrival && (
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-4 text-sm">
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-300 mb-2">
+            <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-4 text-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
                 ⚡ Move direct to dispatch
               </p>
-              <p className="text-xs text-amber-100">
+              <p className="text-xs text-green-100">
                 Pallet <span className="font-mono font-semibold">{lastDirectDispatchArrival.palletId}</span> has
-                arrived — no rack, take it straight to{' '}
+                arrived — no staging, take it straight to{' '}
                 {lastDirectDispatchArrival.dispatchLine ?? 'the dispatch line'}.
               </p>
             </div>
@@ -518,9 +518,9 @@ export function LoadingBayPage() {
         if (dispatchTasks.length === 0 && !activeDispatch) return null;
 
         return (
-          <div className="space-y-4 rounded-2xl border border-purple-800 bg-purple-900/20 p-6">
-            <h2 className="text-lg font-semibold text-purple-200">📦 Dispatch Workflow</h2>
-            <p className="text-xs text-purple-300">
+          <div className="space-y-4 rounded-2xl border border-blue-800 bg-blue-900/20 p-6">
+            <h2 className="text-lg font-semibold text-blue-200">📦 Dispatch Workflow</h2>
+            <p className="text-xs text-blue-300">
               Loading Bay Picker: Scan racks and pallets leaving the loading bay to dispatch line
             </p>
 
@@ -536,13 +536,13 @@ export function LoadingBayPage() {
                   const expectedRackId = nextItem?.sourceRackId;
                   return (
                     <>
-                      <p className="text-sm text-purple-200">
-                        Pallet <span className="font-mono font-semibold text-purple-100">{nextItem?.palletId}</span> — scan the bay rack location
+                      <p className="text-sm text-blue-200">
+                        Pallet <span className="font-mono font-semibold text-blue-100">{nextItem?.palletId}</span> — scan the bay rack location
                       </p>
                       {expectedRackId ? (
-                        <div className="rounded-lg bg-purple-800/30 p-3 mb-3">
-                          <p className="text-xs font-semibold text-purple-300 mb-2">System recommends (FIFO):</p>
-                          <p className="text-sm text-purple-100 font-mono">{expectedRackId}</p>
+                        <div className="rounded-lg bg-blue-800/30 p-3 mb-3">
+                          <p className="text-xs font-semibold text-blue-300 mb-2">System recommends (FIFO):</p>
+                          <p className="text-sm text-blue-100 font-mono">{expectedRackId}</p>
                         </div>
                       ) : (
                         <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 mb-3">
@@ -555,7 +555,7 @@ export function LoadingBayPage() {
                         onScan={handleScanBayRackForDispatch}
                         suggestions={expectedRackId ? [expectedRackId] : []}
                       />
-                      <button onClick={cancelDispatch} className="text-xs text-purple-400 hover:text-purple-300">
+                      <button onClick={cancelDispatch} className="text-xs text-blue-400 hover:text-blue-300">
                         Cancel
                       </button>
                     </>
@@ -566,8 +566,8 @@ export function LoadingBayPage() {
                   const nextUnpicked = activeDispatch?.items.find((i) => !i.picked);
                   return (
                     <>
-                      <p className="text-sm text-purple-200">
-                        Bay Rack <span className="font-mono font-semibold text-purple-100">{dispatchWizard.bayRackId}</span> — scan pallet
+                      <p className="text-sm text-blue-200">
+                        Bay Rack <span className="font-mono font-semibold text-blue-100">{dispatchWizard.bayRackId}</span> — scan pallet
                       </p>
                       <ScanInput
                         label="Scan pallet barcode"
@@ -577,7 +577,7 @@ export function LoadingBayPage() {
                       />
                       <button
                         onClick={() => setDispatchWizard({ ...dispatchWizard, step: 'scan-pallet', bayRackId: null })}
-                        className="text-xs text-purple-400 hover:text-purple-300"
+                        className="text-xs text-blue-400 hover:text-blue-300"
                       >
                         Back to rack selection
                       </button>
@@ -588,18 +588,18 @@ export function LoadingBayPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-sm text-purple-300">Your dispatch picking tasks:</p>
+                <p className="text-sm text-blue-300">Your dispatch picking tasks:</p>
                 {dispatchTasks.length === 0 ? (
-                  <p className="text-xs text-purple-400">No active dispatch picking tasks assigned to you.</p>
+                  <p className="text-xs text-blue-400">No active dispatch picking tasks assigned to you.</p>
                 ) : (
                   dispatchTasks.map((task) => (
                     <button
                       key={task.id}
                       onClick={() => setDispatchWizard({ step: 'scan-pallet', taskId: task.id, palletId: null, dispatchDestination: null, bayRackId: null })}
-                      className="block w-full rounded-lg bg-purple-800/30 px-3 py-2 text-left text-sm hover:bg-purple-800/50"
+                      className="block w-full rounded-lg bg-blue-800/30 px-3 py-2 text-left text-sm hover:bg-blue-800/50"
                     >
-                      <p className="font-mono font-semibold text-purple-200">{task.id}</p>
-                      <p className="text-xs text-purple-400">
+                      <p className="font-mono font-semibold text-blue-200">{task.id}</p>
+                      <p className="text-xs text-blue-400">
                         {task.items.filter(i => !i.picked).length}/{task.items.length} pallet(s) remaining
                       </p>
                     </button>

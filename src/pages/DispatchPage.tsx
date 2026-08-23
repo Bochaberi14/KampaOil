@@ -19,6 +19,8 @@ export function DispatchPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
   const loads = useWarehouseStore((s) => s.loads);
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
+  const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
+  const dispatchVerifications = useWarehouseStore((s) => s.dispatchVerifications);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
   const scanDispatchLine = useWarehouseStore((s) => s.scanDispatchLine);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
@@ -46,6 +48,35 @@ export function DispatchPage() {
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
   const pickingComplete = soPickTasks.length > 0 && soPickTasks.every((t) => t.status === 'Completed');
+  const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
+  const dispatchLineActuallyScanned = !!soVerification?.dispatchLineScannedAt;
+
+  const productionApproval = selectedSO
+    ? directDispatchApprovals.find(
+        (a) => a.salesOrderId === selectedSO.id && a.source === 'Production' && a.status === 'Approved',
+      )
+    : undefined;
+  const productionDirectPallets = selectedSO && productionApproval
+    ? pallets.filter(
+        (p) => p.status === 'InTransitToTruck' && loads.find((l) => l.palletId === p.id)?.sku === selectedSO.sku,
+      )
+    : [];
+  const productionArrived = productionDirectPallets.filter((p) => p.directDispatchArrivedAt);
+
+  // Three-stage lifecycle for a direct-dispatch pick task: moving (In
+  // Progress) → arrived at the loading bay (Staged) → dispatch line scanned
+  // (Completed). A task's own 'Completed' status only means "left storage" —
+  // it isn't staged until the pallet is physically confirmed at the bay.
+  function pickTaskDisplayStatus(t: (typeof pickTasks)[number]) {
+    if (t.origin === 'Storage' && t.directDispatch) {
+      if (t.status !== 'Completed') return t.status;
+      const allArrived = t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.directDispatchArrivedAt);
+      if (!allArrived) return 'In Progress';
+      return dispatchLineActuallyScanned ? 'Completed' : 'Staged';
+    }
+    if (t.status === 'Completed') return dispatchLineActuallyScanned ? 'Completed' : 'Staged';
+    return t.status;
+  }
 
   const myDispatchPickingTasks = currentUser
     ? pickTasks.filter(
@@ -367,7 +398,7 @@ export function DispatchPage() {
 
               <div className="border-t border-slate-700 pt-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Picking progress</p>
-                {soPickTasks.length === 0 && (
+                {soPickTasks.length === 0 && !productionApproval && (
                   <p className="mt-1 text-xs text-slate-500">No picking requested yet.</p>
                 )}
                 <ul className="mt-1 space-y-1">
@@ -379,9 +410,26 @@ export function DispatchPage() {
                           {t.items.filter((i) => i.picked).length}/{t.items.length} picked
                         </span>
                       </span>
-                      <StatusPill status={t.status} />
+                      <StatusPill status={pickTaskDisplayStatus(t)} />
                     </li>
                   ))}
+                  {productionApproval && (
+                    <li className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300">
+                        Production Direct
+                        <span className="ml-2 text-slate-500">
+                          {productionArrived.length}/{productionDirectPallets.length} arrived
+                        </span>
+                      </span>
+                      <StatusPill
+                        status={
+                          productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
+                            ? (dispatchLineActuallyScanned ? 'Completed' : 'Staged')
+                            : 'In Progress'
+                        }
+                      />
+                    </li>
+                  )}
                 </ul>
               </div>
 
