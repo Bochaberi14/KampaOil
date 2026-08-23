@@ -84,6 +84,10 @@ const STYLES: Record<string, string> = {
   Planned: PENDING_ACTION,
   Available: DONE,
   ReturnedToStorage: DONE,
+
+  // Pallet location check (Stock HOD lookup)
+  Match: DONE,
+  Mismatch: ERROR,
 };
 
 export function StatusPill({ status }: { status: string }) {

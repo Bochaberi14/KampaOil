@@ -1,6 +1,9 @@
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { LOADING_BAY_ZONES, STORAGE_ZONES } from '../data/seed';
 import { RackGrid } from '../components/RackGrid';
+import { PrintSheet } from '../components/PrintSheet';
+import { InventoryReportPrint } from '../components/InventoryReportPrint';
+import { can } from '../rbac';
 import type { Zone, Load } from '../types/domain';
 
 export function ZoneInventoryPage() {
@@ -8,6 +11,10 @@ export function ZoneInventoryPage() {
   const loads = useWarehouseStore((s) => s.loads);
   const racks = useWarehouseStore((s) => s.racks);
   const bayRacks = useWarehouseStore((s) => s.bayRacks);
+  const storageShelves = useWarehouseStore((s) => s.storageShelves);
+  const loadingBayShelves = useWarehouseStore((s) => s.loadingBayShelves);
+  const currentUser = useWarehouseStore((s) => s.currentUser);
+  const canPrintInventory = can(currentUser?.role, 'print:inventory');
 
   function getZoneStats(zone: Zone) {
     const zoneRacks = zone.warehouseType === 'Storage' ? racks : bayRacks;
@@ -62,11 +69,27 @@ export function ZoneInventoryPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-xl font-bold text-white">Zone Inventory Dashboard</h1>
-        <p className="text-sm text-slate-400">
-          Real-time view of warehouse zones with utilization, contents, and pallet locations.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-white">Zone Inventory Dashboard</h1>
+          <p className="text-sm text-slate-400">
+            Real-time view of warehouse zones with utilization, contents, and pallet locations.
+          </p>
+        </div>
+        {canPrintInventory && (
+          <PrintSheet title="Warehouse Inventory Report" triggerLabel="🖨️ Print inventory report">
+            <InventoryReportPrint
+              storageZones={STORAGE_ZONES}
+              storageShelves={storageShelves}
+              storageRacks={racks}
+              bayZones={LOADING_BAY_ZONES}
+              bayShelves={loadingBayShelves}
+              bayRacks={bayRacks}
+              loads={loads}
+              generatedAt={new Date().toISOString()}
+            />
+          </PrintSheet>
+        )}
       </div>
 
       {/* Storage Zones */}

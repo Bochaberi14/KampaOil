@@ -69,7 +69,7 @@ All warehouse operations are organized by product department:
   - Execute recall scanner operations
 - **Note**: Pickers bypass login and use mobile barcode scanners for all warehouse interactions
 
-### 5. Clerk (Grace Achieng)
+### 5. Stock HOD (Grace Achieng)
 - **Access**: Inventory and quality reporting
 - **Permissions**:
   - Report discrepancies in inventory
@@ -126,7 +126,7 @@ All roles except Picker require web-based login with MFA:
 - Director (Winnie Bochaberi)
 - Manager (Jordan Wanjiru)
 - HODs (3 department heads)
-- Clerk (Grace Achieng)
+- Stock HOD (Grace Achieng)
 - Loader (Brian Kiptoo)
 - QA (Fatuma Noor)
 - Customer Return Clerk (Wanjiku Njeri)
@@ -160,7 +160,7 @@ Pickers use mobile barcode scanners:
 | Manager | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
 | HOD | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | ✓ |
 | Picker | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ |
-| Clerk | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ |
+| Stock HOD | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ |
 | Loader | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ |
 | QA | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ | ✗ | ✓ |
 | Customer Return Clerk | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
@@ -191,7 +191,7 @@ Pickers use mobile barcode scanners:
 3. Access warehouse operations without authentication
 4. Complete picking and scanning tasks
 
-**As Clerk (Quality Reporting)**:
+**As Stock HOD (Quality Reporting)**:
 1. Login: Grace Achieng
 2. Access: Inventory audit, can flag items for hold
 3. Note: Cannot approve holds (requires Manager/HOD/Director approval)
@@ -248,7 +248,7 @@ Manager:    Jordan Wanjiru     | Password: demo
 HOD (Oil):  Priya Kimani       | Password: demo
 HOD (Edibles): David Mutua     | Password: demo
 HOD (Soap): Lucy Wambui        | Password: demo
-Clerk:      Grace Achieng      | Password: demo
+Stock HOD:  Grace Achieng      | Password: demo
 Loader:     Brian Kiptoo       | Password: demo
 QA:         Fatuma Noor        | Password: demo
 Return Clerk: Wanjiku Njeri    | Password: demo

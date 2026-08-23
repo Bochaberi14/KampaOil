@@ -23,7 +23,7 @@ npm run dev
 - HOD Oil: `hod1` (Priya Kimani)
 - Manager: `mgr1` (Jordan Wanjiru)
 - Loader: `load1` (Brian Kiptoo)
-- Clerk: `clerk1` (Grace Achieng)
+- Stock HOD: `stockhod1` (Grace Achieng)
 
 All users use the same password (set in demo).
 
@@ -174,14 +174,14 @@ All users use the same password (set in demo).
 ### [8:00-10:30] Demo #4: Hold Mechanism (2.5 minutes)
 
 **What to Say:**
-> "Fourth, Hold Mechanism. If there's a quality issue, ANY Clerk can immediately halt a pallet. Let me show."
+> "Fourth, Hold Mechanism. If there's a quality issue, ANY Stock HOD can immediately halt a pallet. Let me show."
 
-**Current User**: HOD (hod1) - we'll use Clerk after
+**Current User**: HOD (hod1) - we'll use Stock HOD after
 
 **Step 1: Show inventory verification section**
 ```
 1. Scroll down to "Inventory verification" section
-2. Say: "A Clerk can report discrepancies right here"
+2. Say: "A Stock HOD can report discrepancies right here"
 3. Show the input: "Scan the pallet you found"
 ```
 
@@ -205,7 +205,7 @@ All users use the same password (set in demo).
    - Pallet ID
    - Reason
    - Status (PendingApproval, Active, etc.)
-   - Placed by: [Clerk name]
+   - Placed by: [Stock HOD name]
 4. Say: "As HOD, I can review this hold"
 5. Point to buttons: "Approve Hold Request" or "Reject Hold Request"
 6. Say: "If I approve it, the pallet goes to Recall management"
@@ -213,7 +213,7 @@ All users use the same password (set in demo).
 ```
 
 **What to Highlight:**
-> "One Clerk seeing a problem doesn't mean the pallet is quietly damaged goods. The hold is immediate, visible to management, and requires approval before release. A held pallet cannot sneak through the system."
+> "One Stock HOD seeing a problem doesn't mean the pallet is quietly damaged goods. The hold is immediate, visible to management, and requires approval before release. A held pallet cannot sneak through the system."
 
 **[10:30] Move to next feature**
 
@@ -244,7 +244,7 @@ All users use the same password (set in demo).
    b) Request pickers (assign tasks)
    c) Verify picking is complete
    d) Scan dispatch line (with truck)
-   e) Get Clerk signature
+   e) Get Stock HOD signature
 4. Say: "There's no shortcut—all steps are required"
 ```
 
@@ -264,13 +264,13 @@ All users use the same password (set in demo).
 ```
 1. Say: "Once picking is complete and verified:"
 2. Say: "The system generates a Dispatch Verification form"
-3. Say: "A Clerk MUST sign this form before goods leave"
-4. Say: "The Clerk attaches the driver's name"
-5. Say: "Both the Loader and Clerk are documented"
+3. Say: "A Stock HOD MUST sign this form before goods leave"
+4. Say: "The Stock HOD attaches the driver's name"
+5. Say: "Both the Loader and Stock HOD are documented"
 ```
 
 **What to Highlight:**
-> "You cannot dispatch a single pallet without Loader verification, Clerk signature, AND completed picks. Multiple people verify multiple things. One person's mistake gets caught by the next checkpoint. Fraud becomes exponentially harder."
+> "You cannot dispatch a single pallet without Loader verification, Stock HOD signature, AND completed picks. Multiple people verify multiple things. One person's mistake gets caught by the next checkpoint. Fraud becomes exponentially harder."
 
 **[13:00] Move to next feature**
 
@@ -285,10 +285,10 @@ All users use the same password (set in demo).
 
 **Step 1: Go to Returns and show routing**
 ```
-1. Logout and login as clerk1 (Clerk)
+1. Logout and login as stockhod1 (Stock HOD)
 2. Go to `/returns`
 3. Show "Log a customer return" form
-4. Say: "A Clerk logs the return with product, quantity, reason, photo"
+4. Say: "A Stock HOD logs the return with product, quantity, reason, photo"
 5. Say: "Once logged, the system automatically routes it to the right HOD based on department"
 ```
 
@@ -384,7 +384,7 @@ All users use the same password (set in demo).
 > 2. Department-Scoped Access — HODs see only their department
 > 3. Immutable Audit Trail — Every action logged, timestamped, operator-attributed
 > 4. Hold Mechanism — Quality issues can halt dispatch immediately
-> 5. Multi-Stage Approvals — Dispatch requires Loader + Clerk + completed picks
+> 5. Multi-Stage Approvals — Dispatch requires Loader + Stock HOD + completed picks
 > 6. Returns Management — Sensitive data routed to right approver, tracked to execution
 > 7. Zone-Based Integrity — Products automatically routed to correct zones
 > 
@@ -400,8 +400,8 @@ All users use the same password (set in demo).
 **Q: Can a Manager bypass the Hold mechanism?**  
 A: No. A Manager can APPROVE a hold (escalate to Recall), but they cannot RELEASE a pallet without going through the proper channels. The system code prevents it.
 
-**Q: What if the Loader and Clerk collude?**  
-A: The audit trail records both. A Clerk cannot sign without a Loader's prior dispatch scan, and both are documented with timestamps. Any pattern of unusual approvals would be visible in the audit log.
+**Q: What if the Loader and Stock HOD collude?**  
+A: The audit trail records both. A Stock HOD cannot sign without a Loader's prior dispatch scan, and both are documented with timestamps. Any pattern of unusual approvals would be visible in the audit log.
 
 **Q: How do we prevent someone from logging in as another user?**  
 A: The system uses strong user identification (not shown in demo, but implemented in auth system). Login attempts are logged. In production, multi-factor authentication would add another layer.
@@ -432,7 +432,7 @@ If showing slides after demo:
 **Slide 2**: Role-Based Access Control (diagram showing user roles)  
 **Slide 3**: Audit Trail Example (pallet journey timeline)  
 **Slide 4**: Hold & Recall Flow (process diagram)  
-**Slide 5**: Dispatch Multi-Stage Gate (Loader → Clerk → signed)  
+**Slide 5**: Dispatch Multi-Stage Gate (Loader → Stock HOD → signed)  
 **Slide 6**: Returns Lifecycle (Logged → Approved → Actioned)  
 **Slide 7**: Zone Integrity (visual showing zone separation)  
 **Slide 8**: Compliance Readiness (bullet points on audit/regulatory)  

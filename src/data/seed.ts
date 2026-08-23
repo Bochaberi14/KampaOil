@@ -113,7 +113,7 @@ export const USERS: User[] = [
   { id: 'mgr1', name: 'Manager', role: 'Manager', mfaEnabled: true, loginAttempts: 0 },
   { id: 'hod1', name: 'HOD', role: 'HOD', department: 'Oil & Refinery', mfaEnabled: true, loginAttempts: 0 },
   { id: 'dir1', name: 'Director', role: 'Director', mfaEnabled: true, loginAttempts: 0 },
-  { id: 'clerk1', name: 'Clerk', role: 'Clerk', mfaEnabled: true, loginAttempts: 0 },
+  { id: 'stockhod1', name: 'Stock HOD', role: 'Stock HOD', mfaEnabled: true, loginAttempts: 0 },
   { id: 'load1', name: 'Loader', role: 'Loader', mfaEnabled: true, loginAttempts: 0 },
   { id: 'qa1', name: 'QA', role: 'QA', mfaEnabled: true, loginAttempts: 0 },
   { id: 'ret1', name: 'Returns Clerk', role: 'Customer Return Clerk', mfaEnabled: true, loginAttempts: 0 },

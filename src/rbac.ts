@@ -13,6 +13,7 @@ export type Permission =
   | 'view:returns'
   | 'view:barcodes'
   | 'view:security'
+  | 'print:inventory'
   | 'execute:scan'
   | 'execute:pickTask'
   | 'approve:hold'
@@ -62,14 +63,24 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'execute:scan',
     'execute:pickTask',
   ],
-  // Clerk can flag any product with a problem for a hold (view:hold +
+  // Stock HOD can flag any product with a problem for a hold (view:hold +
   // flag:hold) on top of the rack-mismatch discrepancy path — but flagging
   // only requests a hold; Manager/HOD/Director still approve or reject it.
-  Clerk: ['view:dashboard', 'view:audit', 'view:hold', 'report:discrepancy', 'flag:hold', 'view:barcodes'],
+  // Also owns physical stock verification: printing the zone/shelf/rack
+  // inventory report and looking up where a pallet should be.
+  'Stock HOD': [
+    'view:dashboard',
+    'view:audit',
+    'view:hold',
+    'report:discrepancy',
+    'flag:hold',
+    'view:barcodes',
+    'print:inventory',
+  ],
   // Loader owns the whole dispatch coordination: releases sales orders,
   // assigns pickers, registers the collecting vehicle when it arrives,
   // verifies it against the handover printout, and signs alongside the
-  // driver — there's no separate Clerk step in this flow.
+  // driver — there's no separate Stock HOD step in this flow.
   Loader: ['view:dashboard', 'view:loader', 'plan:dispatch', 'sign:dispatch', 'view:barcodes'],
   // QA owns Hold & Recall approvals specifically, not direct-dispatch approval
   // or supervisor sign-off. QA also reviews and decides on customer returns.
@@ -93,7 +104,7 @@ export const ROLE_BLURB: Record<Role, string> = {
   Manager: 'Manage operations — approve holds, recalls & direct dispatch',
   HOD: 'Supervise warehouse — approve picking, holds & recalls',
   Picker: 'Scan & move pallets — production, storage, loading bay, dispatch',
-  Clerk: 'Inventory reports & discrepancy reporting — can flag a product for hold, not approve one',
+  'Stock HOD': 'Inventory reports & discrepancy reporting — can flag a product for hold, not approve one; prints zone/rack inventory reports and looks up expected pallet locations',
   Loader: 'Coordinates dispatch end-to-end — releases orders, assigns pickers, registers & verifies the vehicle, signs the handover',
   QA: 'Quality assurance — approve/reject holds, decide recall outcomes, review & decide customer returns',
   'Customer Return Clerk': 'Log customer returns — product, quantity, defect photo & remarks',

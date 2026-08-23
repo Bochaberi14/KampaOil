@@ -3,7 +3,7 @@ export type Role =
   | 'Manager'
   | 'HOD'
   | 'Director'
-  | 'Clerk'
+  | 'Stock HOD'
   | 'Loader'
   | 'QA'
   | 'Customer Return Clerk'
@@ -329,7 +329,7 @@ export interface HoldRecord {
   placedByUserId: string;
   placedByRole: Role;
   placedAt: string;
-  // A Clerk-flagged problem starts PendingApproval — the pallet is locked
+  // A Stock HOD-flagged problem starts PendingApproval — the pallet is locked
   // immediately, but only becomes a real (recall-eligible) hold once a
   // Manager/HOD/Director approves it; they can also Reject it, which
   // releases the pallet without ever treating it as an active hold.
@@ -430,7 +430,7 @@ export interface CustomerReturn {
 // Loader then scans the vehicle barcode (VehicleVerified) before the Loader
 // and Driver physically check the goods and both sign (Verified). The WMS's
 // workflow ends here — not "loaded," which happens outside this system.
-// There is no Clerk step in this flow.
+// There is no Stock HOD step in this flow.
 export interface DispatchVerification {
   id: string;
   salesOrderId: string;

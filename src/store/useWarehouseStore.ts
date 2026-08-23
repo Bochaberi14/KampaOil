@@ -428,7 +428,7 @@ interface WarehouseState {
     operatorId: string;
   }) => Result<{ verification: DispatchVerification }>;
   // Loader + driver sign-off on the handover printout — the WMS's workflow
-  // ends here. No separate Clerk step.
+  // ends here. No separate Stock HOD step.
   signDispatchVerification: (args: {
     verificationId: string;
     driverName: string;
@@ -449,7 +449,7 @@ interface WarehouseState {
     note: string;
     operatorId: string;
   }) => Result<{ hold: HoldRecord }>;
-  // Clerk flags any pallet with a problem — locks it immediately, but only
+  // Stock HOD flags any pallet with a problem — locks it immediately, but only
   // Manager/HOD/Director approving or rejecting it decides whether it's a
   // real hold.
   flagHoldRequest: (args: {
@@ -2305,7 +2305,7 @@ export const useWarehouseStore = create<WarehouseState>()(
       },
 
       // Loader + Driver both confirm the goods staged at the dispatch line
-      // match the printout — no separate Clerk step. Captured together in
+      // match the printout — no separate Stock HOD step. Captured together in
       // one action since both confirmations happen at the same moment.
       signDispatchVerification: ({ verificationId, driverName, operatorId }) => {
         const state = get();
@@ -2406,7 +2406,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok(undefined);
       },
 
-      // Clerk-only: physical inventory verification surfaces a discrepancy,
+      // Stock HOD-only: physical inventory verification surfaces a discrepancy,
       // which locks the pallet immediately (spec §21) — distinct from the
       // Director/Manager/HOD general hold path (spec §22), so it isn't gated
       // behind approver sign-off.
@@ -2415,7 +2415,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const user = state.currentUser;
         if (!user) return err('Not logged in');
         if (!can(user.role, 'report:discrepancy')) {
-          return err(`${user.role} cannot report a discrepancy — requires Clerk`);
+          return err(`${user.role} cannot report a discrepancy — requires Stock HOD`);
         }
         const pallet = state.pallets.find((p) => p.id === palletId);
         if (!pallet) return err(`Pallet "${palletId}" not found`);
@@ -2451,7 +2451,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const user = state.currentUser;
         if (!user) return err('Not logged in');
         if (!can(user.role, 'flag:hold')) {
-          return err(`${user.role} cannot flag a product for hold — requires Clerk`);
+          return err(`${user.role} cannot flag a product for hold — requires Stock HOD`);
         }
         if (!note || !note.trim()) {
           return err('Describe the issue before flagging — the approver needs to know why');

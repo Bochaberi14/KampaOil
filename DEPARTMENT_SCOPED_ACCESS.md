@@ -50,7 +50,7 @@ Each HOD is assigned to a specific department and can only access:
 - Can see all departments (need to access different zones for picking)
 - Can scan and move pallets across all zones
 
-**Other Roles** (Clerk, Loader, QA, Return Clerk)
+**Other Roles** (Stock HOD, Loader, QA, Return Clerk)
 - Can see all departments
 - Role-specific permissions apply regardless of department
 

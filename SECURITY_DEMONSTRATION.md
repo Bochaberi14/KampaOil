@@ -28,7 +28,7 @@ The Kapa Oil WMS implements **5 layers of security** to protect warehouse operat
 - 👤 **HOD** (hod1: Priya Kimani) - Department oversight, hold/release authority
 - 👤 **Manager** (mgr1: Jordan Wanjiru) - Cross-department decisions
 - 👤 **Loader** (load1: Brian Kiptoo) - Dispatch planning, vehicle registration
-- 👤 **Clerk** (clerk1: Grace Achieng) - Discrepancy reporting only
+- 👤 **Stock HOD** (stockhod1: Grace Achieng) - Discrepancy reporting only
 - 👤 **Director** (dir1: Michael Ochieng) - Recall destination authority
 
 ---
@@ -48,7 +48,7 @@ The Kapa Oil WMS implements **5 layers of security** to protect warehouse operat
    - Cannot access `/loader`, `/hold`, `/recall`
    - No "Approve Hold" or "Request Direct Dispatch" buttons
 
-2. **Logout, log in as Clerk**
+2. **Logout, log in as Stock HOD**
    - Can ONLY access `/audit` page for "Report Discrepancy"
    - Cannot access production, storage, or dispatch
    - Limited to read-only inventory verification
@@ -127,7 +127,7 @@ The Kapa Oil WMS implements **5 layers of security** to protect warehouse operat
 
 **Demo Steps**:
 
-1. **As Clerk** → `/audit` → Select a racked pallet
+1. **As Stock HOD** → `/audit` → Select a racked pallet
 2. **Report Discrepancy**:
    - "Weight mismatch: Expected 100kg, found 95kg"
    - Pallet is **HELD** immediately (status: "Locked under investigation")
@@ -148,7 +148,7 @@ The Kapa Oil WMS implements **5 layers of security** to protect warehouse operat
    - Can decide: Send to ReworkLine, Return to Storage, or Scrap
 
 **Security Point to Highlight**:
-> "A single Clerk can immediately halt a pallet's journey if something is wrong. The pallet cannot be forced through the system—it requires management approval. This prevents both accidental errors and intentional fraud."
+> "A single Stock HOD can immediately halt a pallet's journey if something is wrong. The pallet cannot be forced through the system—it requires management approval. This prevents both accidental errors and intentional fraud."
 
 ---
 
@@ -185,7 +185,7 @@ The Kapa Oil WMS implements **5 layers of security** to protect warehouse operat
      Dispatch Line: LINE 001
      ```
 
-4. **As Clerk** → Sign dispatch verification
+4. **As Stock HOD** → Sign dispatch verification
    - Enter driver name
    - Click "Sign"
    - Status changes to "Verified"
@@ -323,12 +323,12 @@ Talk through what's logged:
 | **Department Scoping** | Data isolation across departments | HODs see only their dept returns |
 | **Audit Trail** | Complete traceability for compliance | Pallet journey timeline |
 | **Hold Mechanism** | Prevent unauthorized dispatch | Block pallet during quality review |
-| **Multi-Stage Approval** | Gates prevent errors and fraud | Dispatch requires Loader + Clerk signatures |
+| **Multi-Stage Approval** | Gates prevent errors and fraud | Dispatch requires Loader + Stock HOD signatures |
 | **Returns Routing** | Sensitive data handled appropriately | Returns go to correct approver |
 | **Zone Enforcement** | Inventory integrity | Products routed to correct zones |
 | **State Machine** | Cannot skip critical steps | Can't dispatch until picks complete |
 | **Immutable Records** | Compliance-ready audit trail | All movements timestamped & operator-tracked |
-| **Role-Based Gates** | Different permissions per role | Clerk cannot approve holds; HOD cannot dispatch |
+| **Role-Based Gates** | Different permissions per role | Stock HOD cannot approve holds; HOD cannot dispatch |
 
 ---
 
@@ -338,10 +338,10 @@ Talk through what's logged:
 "Every action in this system is timestamped, attributed to an operator, and permanently recorded. If a pallet goes missing, we know exactly who touched it and when."
 
 ### ✋ **"Multiple Checkpoints"**
-"We don't rely on a single person to be correct. Holds require manager approval, dispatch requires Loader + Clerk coordination, and quality issues escalate to recall management."
+"We don't rely on a single person to be correct. Holds require manager approval, dispatch requires Loader + Stock HOD coordination, and quality issues escalate to recall management."
 
 ### 🛡️ **"Roles Are Enforced"**
-"A Picker cannot approve holds. A Clerk cannot request dispatch. The system code itself prevents unauthorized actions—no 'trust the user' here."
+"A Picker cannot approve holds. A Stock HOD cannot request dispatch. The system code itself prevents unauthorized actions—no 'trust the user' here."
 
 ### 📊 **"Real-Time Visibility"**
 "Zone dashboard shows live inventory, utilization, and capacity. Discrepancies are caught immediately, not after the goods leave the warehouse."
@@ -378,7 +378,7 @@ A: The system can log all login attempts. The demo shows the UI; in production, 
 Before showing the director:
 
 - [ ] System is fully booted and responsive
-- [ ] Multiple test users are created (Picker, HOD, Manager, Loader, Clerk)
+- [ ] Multiple test users are created (Picker, HOD, Manager, Loader, Stock HOD)
 - [ ] Sample data includes pallets in various states (Racked, OnBay, Dispatched)
 - [ ] A hold record exists to demonstrate hold mechanism
 - [ ] A return record exists to demonstrate routing

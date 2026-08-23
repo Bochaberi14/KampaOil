@@ -2,13 +2,14 @@ import { useState, type ReactNode } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { StatusPill } from '../components/StatusPill';
-import { ageInHours, buildPalletJourney, getRackedLoads, groupLoadsBy } from '../engine/audit';
+import { ageInHours, buildPalletJourney, getRackedLoads, groupLoadsBy, resolvePalletLocationCheck } from '../engine/audit';
 import { USERS } from '../data/seed';
 import { can } from '../rbac';
 
 export function AuditPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
   const racks = useWarehouseStore((s) => s.racks);
+  const bayRacks = useWarehouseStore((s) => s.bayRacks);
   const loads = useWarehouseStore((s) => s.loads);
   const batches = useWarehouseStore((s) => s.batches);
   const holds = useWarehouseStore((s) => s.holds);
@@ -25,6 +26,11 @@ export function AuditPage() {
     ? buildPalletJourney(journeyPalletId, { pallets, loads, batches, holds, recallCases, manifests, movements })
     : null;
 
+  const [lookupPalletId, setLookupPalletId] = useState<string | null>(null);
+  const locationCheck = lookupPalletId
+    ? resolvePalletLocationCheck(lookupPalletId, { pallets, racks, bayRacks })
+    : null;
+
   function operatorName(userId: string) {
     return USERS.find((u) => u.id === userId)?.name ?? userId;
   }
@@ -32,7 +38,7 @@ export function AuditPage() {
   const [verifyPalletId, setVerifyPalletId] = useState<string | null>(null);
   const [verifyStep, setVerifyStep] = useState<'pallet' | 'rack'>('pallet');
 
-  const isClerk = can(currentUser?.role, 'report:discrepancy');
+  const isStockHod = can(currentUser?.role, 'report:discrepancy');
   const verifyPallet = verifyPalletId ? (pallets.find((p) => p.id === verifyPalletId) ?? null) : null;
   const expectedRackId =
     verifyPallet && verifyPallet.location.type === 'Rack' ? verifyPallet.location.rackId : null;
@@ -100,7 +106,7 @@ export function AuditPage() {
         <h1 className="text-xl font-bold text-white">Stage 7 · Inventory Audits</h1>
         <p className="text-sm text-slate-400">
           Live reports computed from current warehouse state. Flagging a discrepancy immediately
-          locks the pallet under investigation (Clerk only).
+          locks the pallet under investigation (Stock HOD only).
         </p>
       </div>
 
@@ -242,18 +248,60 @@ export function AuditPage() {
           )}
         </Report>
 
+        <Report title="Pallet location check — where should it be?">
+          <p className="text-xs text-slate-500">
+            Look up a pallet to see where it should be racked, so you can walk over and confirm it's
+            really there.
+          </p>
+          <ScanInput
+            label="Scan or type a pallet ID"
+            placeholder="e.g. PLT-001"
+            onScan={(id) => {
+              const found = pallets.find((p) => p.id === id);
+              if (!found) {
+                pushToast(`Pallet ${id} not found`, 'error');
+                return;
+              }
+              setLookupPalletId(id);
+            }}
+            suggestions={pallets.slice(0, 8).map((p) => p.id)}
+          />
+          {locationCheck && (
+            <div className="mt-3 space-y-1.5 rounded-lg border border-slate-800 bg-slate-800/60 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Pallet</span>
+                <span className="font-mono font-semibold text-slate-100">{locationCheck.pallet.id}</span>
+              </div>
+              <ReportRow
+                label="Should be at"
+                value={locationCheck.expected ? locationCheck.expected.formatted : 'No recommendation on record'}
+              />
+              <ReportRow
+                label="Currently recorded at"
+                value={locationCheck.actual ? locationCheck.actual.formatted : (locationCheck.actualStatusNote ?? '—')}
+              />
+              {locationCheck.matches !== null && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-slate-400">Result</span>
+                  <StatusPill status={locationCheck.matches ? 'Match' : 'Mismatch'} />
+                </div>
+              )}
+            </div>
+          )}
+        </Report>
+
         <Report title="Inventory verification">
           <p className="text-xs text-slate-500">
             Physically walk the warehouse: scan the pallet you found, then scan the rack it was
             actually sitting in. A mismatch immediately raises a discrepancy and locks the pallet.
           </p>
-          {!isClerk && (
+          {!isStockHod && (
             <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
               {currentUser?.role ?? 'This role'} cannot perform inventory verification — log in as
-              Clerk to continue.
+              Stock HOD to continue.
             </p>
           )}
-          {isClerk && verifyStep === 'pallet' && (
+          {isStockHod && verifyStep === 'pallet' && (
             <ScanInput
               label="Scan the pallet you found"
               placeholder="e.g. PLT-003"
@@ -261,7 +309,7 @@ export function AuditPage() {
               suggestions={pallets.filter((p) => p.status === 'Racked' && !p.holdId).map((p) => p.id)}
             />
           )}
-          {isClerk && verifyStep === 'rack' && verifyPalletId && (
+          {isStockHod && verifyStep === 'rack' && verifyPalletId && (
             <div className="space-y-2">
               <div className="rounded-lg border border-slate-800 bg-slate-800/60 p-3 text-sm text-slate-300">
                 Pallet <span className="font-mono font-semibold text-slate-100">{verifyPalletId}</span>{' '}

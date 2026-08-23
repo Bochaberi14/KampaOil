@@ -168,7 +168,7 @@ export function HoldPage() {
         <p className="text-sm text-slate-400">
           A held pallet cannot be picked, sold, or dispatched, and is removed from FIFO allocation — at
           any stage: production/line, in transit, storage, loading bay, or dispatch. Manager, HOD, or
-          Director can place a hold directly, or approve/reject a hold a Clerk has flagged.
+          Director can place a hold directly, or approve/reject a hold a Stock HOD has flagged.
         </p>
       </div>
 
