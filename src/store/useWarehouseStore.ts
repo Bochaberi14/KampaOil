@@ -385,6 +385,9 @@ interface WarehouseState {
     salesOrderId: string,
     operatorId: string,
     source?: 'Storage' | 'Production',
+    // Production only: exact number of pallets to divert (defaults to 1).
+    // Ignored for 'Storage', which stays a units-based bay-shortfall pick.
+    palletCount?: number,
   ) => Result<{ approval: DirectDispatchApproval }>;
   approveDirectDispatchRequest: (approvalId: string, operatorId: string) => Result<{ task: PickTask | null }>;
   rejectDirectDispatchRequest: (approvalId: string, operatorId: string) => Result;
@@ -853,7 +856,12 @@ export const useWarehouseStore = create<WarehouseState>()(
         // here on, so the later scan when it leaves the line doesn't
         // re-evaluate against a shortfall that may have since changed.
         const matchedApproval = state.directDispatchApprovals.find((a) => {
-          if (a.source !== 'Production' || a.status !== 'Approved' || a.shortfallQty <= 0) return false;
+          if (a.source !== 'Production' || a.status !== 'Approved') return false;
+          // Match on pallet count remaining, NOT shortfallQty — shortfallQty
+          // is a raw unit figure that can span several pallets, which used
+          // to let a single approval sweep up every pallet finishing for
+          // that SKU until the units ran out.
+          if ((a.palletsRemaining ?? 0) <= 0) return false;
           const so = state.salesOrders.find((s) => s.id === a.salesOrderId);
           return !!so && so.sku === po.sku;
         });
@@ -893,7 +901,11 @@ export const useWarehouseStore = create<WarehouseState>()(
           directDispatchApprovals: matchedApproval
             ? state.directDispatchApprovals.map((a) =>
                 a.id === matchedApproval.id
-                  ? { ...a, shortfallQty: Math.max(0, a.shortfallQty - quantity) }
+                  ? {
+                      ...a,
+                      shortfallQty: Math.max(0, a.shortfallQty - quantity),
+                      palletsRemaining: Math.max(0, (a.palletsRemaining ?? 0) - 1),
+                    }
                   : a,
               )
             : state.directDispatchApprovals,
@@ -1846,7 +1858,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ allocation });
       },
 
-      requestDirectDispatchApproval: (salesOrderId, operatorId, source = 'Storage') => {
+      requestDirectDispatchApproval: (salesOrderId, operatorId, source = 'Storage', palletCount) => {
         const state = get();
         if (!can(state.currentUser?.role, 'plan:dispatch')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot request a direct dispatch — requires Loader`);
@@ -1874,6 +1886,47 @@ export const useWarehouseStore = create<WarehouseState>()(
           if (shortfall <= 0) return err('Bay and storage already hold enough stock — no direct dispatch needed');
         }
 
+        const requestedPallets = Math.max(1, palletCount ?? 1);
+
+        // A second request for the same order+source (double-click, repeated
+        // release, etc.) must top up the existing open approval instead of
+        // stacking a brand-new one alongside it — otherwise two "2 pallet"
+        // requests silently become "4 pallets outstanding" with no visible
+        // trace of the duplicate.
+        const existingApproval = state.directDispatchApprovals.find(
+          (a) =>
+            a.salesOrderId === salesOrderId &&
+            a.source === source &&
+            a.status === 'Approved' &&
+            (source === 'Production' ? (a.palletsRemaining ?? 0) > 0 : a.shortfallQty > 0),
+        );
+
+        if (existingApproval) {
+          const merged: DirectDispatchApproval = {
+            ...existingApproval,
+            shortfallQty: existingApproval.shortfallQty + shortfall,
+            palletsRemaining:
+              source === 'Production' ? (existingApproval.palletsRemaining ?? 0) + requestedPallets : null,
+          };
+          set((state) => ({
+            directDispatchApprovals: state.directDispatchApprovals.map((a) =>
+              a.id === existingApproval.id ? merged : a,
+            ),
+          }));
+          if (source === 'Production') {
+            get().pushToast(
+              `Direct dispatch from Production topped up for ${salesOrderId} — ${merged.palletsRemaining} pallet${merged.palletsRemaining === 1 ? '' : 's'} off the line will now go straight to dispatch`,
+              'success',
+            );
+          } else {
+            get().pushToast(
+              `Direct dispatch from Storage topped up for ${salesOrderId} — ${merged.shortfallQty.toLocaleString()} units — assign Storage Pickers to pick it`,
+              'success',
+            );
+          }
+          return ok({ approval: merged });
+        }
+
         // Auto-approve and execute immediately (no manager approval needed)
         const approval: DirectDispatchApproval = {
           id: generateApprovalId(),
@@ -1885,6 +1938,10 @@ export const useWarehouseStore = create<WarehouseState>()(
           approvedByUserId: operatorId,
           approvedAt: new Date().toISOString(),
           source,
+          // Cap Production diversion to an exact pallet count (default 1) —
+          // never let it silently chase shortfall units across however many
+          // pallets that happens to span.
+          palletsRemaining: source === 'Production' ? requestedPallets : null,
         };
         set((state) => ({ directDispatchApprovals: [...state.directDispatchApprovals, approval] }));
         get().enqueueSapSync(
@@ -1894,7 +1951,7 @@ export const useWarehouseStore = create<WarehouseState>()(
 
         if (source === 'Production') {
           get().pushToast(
-            `Direct dispatch from Production approved for ${salesOrderId} — system will recommend dispatch for upcoming pallets until fulfilled`,
+            `Direct dispatch from Production approved for ${salesOrderId} — the next ${approval.palletsRemaining} pallet${approval.palletsRemaining === 1 ? '' : 's'} off the line will go straight to dispatch`,
             'success',
           );
           return ok({ approval });

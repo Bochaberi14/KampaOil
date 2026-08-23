@@ -85,6 +85,11 @@ export function DispatchPlanningPage() {
   const remainingToAllocate = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
   const [directDispatchRequests, setDirectDispatchRequests] = useState<Set<'Storage' | 'Production'>>(new Set());
   const [selectedDirectDispatchSource, setSelectedDirectDispatchSource] = useState<'Storage' | 'Production' | null>(null);
+  // Exact number of pallets to divert straight to dispatch from Production.
+  // Defaults to 1 and is NEVER auto-derived from a unit-shortfall estimate —
+  // on a fresh order nothing is in storage yet, so that estimate degenerates
+  // to "the whole remaining order" and silently diverts everything.
+  const [productionPalletCount, setProductionPalletCount] = useState('1');
 
   function handleRelease() {
     if (!selectedSO || !currentUser) return;
@@ -109,7 +114,8 @@ export function DispatchPlanningPage() {
       requestDirectDispatchApproval(selectedSO.id, currentUser.id, 'Storage');
     }
     if (directDispatchRequests.has('Production')) {
-      requestDirectDispatchApproval(selectedSO.id, currentUser.id, 'Production');
+      const palletCount = Math.max(1, Number(productionPalletCount) || 1);
+      requestDirectDispatchApproval(selectedSO.id, currentUser.id, 'Production', palletCount);
     }
 
     pushToast(`Released ${parsedQty} units for ${selectedSO.id}`, 'success');
@@ -117,6 +123,7 @@ export function DispatchPlanningPage() {
     setShowGenerateButton(selectedSO.id);
     setReleaseQty('');
     setDirectDispatchRequests(new Set());
+    setProductionPalletCount('1');
   }
 
   function handleAddPickerRow() {
@@ -348,6 +355,8 @@ export function DispatchPlanningPage() {
               setDirectDispatchRequests={setDirectDispatchRequests}
               selectedDirectDispatchSource={selectedDirectDispatchSource}
               setSelectedDirectDispatchSource={setSelectedDirectDispatchSource}
+              productionPalletCount={productionPalletCount}
+              setProductionPalletCount={setProductionPalletCount}
               handleAddPickerRow={handleAddPickerRow}
               handleRemovePickerRow={handleRemovePickerRow}
               handleAssignPickers={handleAssignPickers}
@@ -416,6 +425,8 @@ function DispatchOrderPanel({
   setDirectDispatchRequests,
   selectedDirectDispatchSource,
   setSelectedDirectDispatchSource,
+  productionPalletCount,
+  setProductionPalletCount,
 }: any) {
   const trucks = useWarehouseStore((s) => s.trucks);
   const pallets = useWarehouseStore((s) => s.pallets);
@@ -682,6 +693,22 @@ function DispatchOrderPanel({
                         />
                         Request {fromProd.toLocaleString()} from Production
                       </label>
+                      {directDispatchRequests.has('Production') && (
+                        <div className="flex items-center gap-2 pl-6">
+                          <label className="text-xs text-slate-400" htmlFor="production-pallet-count">
+                            Pallets to divert
+                          </label>
+                          <input
+                            id="production-pallet-count"
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={productionPalletCount}
+                            onChange={(e) => setProductionPalletCount(e.target.value)}
+                            className="w-16 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -698,6 +725,9 @@ function DispatchOrderPanel({
                   <p className="text-xs font-semibold text-emerald-300 mb-2">✓ Direct Dispatch Approved</p>
                   <p className="text-xs text-emerald-100">
                     {approval.source} direct dispatch: {approval.shortfallQty} units
+                    {approval.source === 'Production' && approval.palletsRemaining != null
+                      ? ` (${approval.palletsRemaining} pallet${approval.palletsRemaining === 1 ? '' : 's'} remaining)`
+                      : ''}
                   </p>
                 </div>
               );

@@ -381,6 +381,12 @@ export interface DirectDispatchApproval {
   // Production: pulls a still-Loaded pallet straight off the line, skipping
   // storage and the bay entirely.
   source: 'Storage' | 'Production';
+  // Production only: exact number of pallets this approval may still divert
+  // straight to dispatch. Matching in confirmLoad decrements this by 1 per
+  // pallet — it does NOT chase shortfallQty (a units figure that can span
+  // several pallets), so a request for "1 pallet" can never sweep up more
+  // than 1 pallet. Null for Storage approvals, which don't match pallets.
+  palletsRemaining: number | null;
 }
 
 // A Loader's pre-plan of how much of a sales order's quantity goes onto a

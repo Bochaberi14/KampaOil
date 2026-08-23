@@ -63,6 +63,7 @@ export function LoaderPage() {
   const [plateConfirmed, setPlateConfirmed] = useState(false);
   const [signForm, setSignForm] = useState({ driverName: '', loaderConfirmed: false, driverConfirmed: false });
   const [shouldAutoPrint, setShouldAutoPrint] = useState(false);
+  const [directDispatchPalletCount, setDirectDispatchPalletCount] = useState('1');
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
 
@@ -260,7 +261,8 @@ export function LoaderPage() {
 
   function handleRequestDirectDispatch(source: 'Storage' | 'Production') {
     if (!selectedSO || !currentUser) return;
-    const result = requestDirectDispatchApproval(selectedSO.id, currentUser.id, source);
+    const palletCount = source === 'Production' ? Math.max(1, Number(directDispatchPalletCount) || 1) : undefined;
+    const result = requestDirectDispatchApproval(selectedSO.id, currentUser.id, source, palletCount);
     if (!result.ok) {
       pushToast(result.error, 'error');
       return;
@@ -584,12 +586,26 @@ export function LoaderPage() {
                       ? 'Bay has enough stock'
                       : `Request from Storage (${Math.max(0, (selectedSO.qty - selectedSO.dispatchedQty) - onBayQty)} units short)`}
                   </button>
-                  <button
-                    onClick={() => handleRequestDirectDispatch('Production')}
-                    className="w-full rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-                  >
-                    Request from Production
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500" htmlFor="direct-dispatch-pallet-count">
+                      Pallets
+                    </label>
+                    <input
+                      id="direct-dispatch-pallet-count"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={directDispatchPalletCount}
+                      onChange={(e) => setDirectDispatchPalletCount(e.target.value)}
+                      className="w-16 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                    />
+                    <button
+                      onClick={() => handleRequestDirectDispatch('Production')}
+                      className="flex-1 rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                    >
+                      Request from Production
+                    </button>
+                  </div>
                 </div>
                 {directDispatchApprovals.some(
                   (a) => a.salesOrderId === selectedSO.id && a.status === 'PendingApproval'
