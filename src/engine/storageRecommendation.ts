@@ -105,16 +105,28 @@ export function formatStorageLocation(recommendation: StorageRecommendation): st
   return `${binName} → Shelf ${shelfNum} → Rack ${rackNum}`;
 }
 
-// Recommend loading bay rack location (similar to storage recommendations)
+// Map SKU to loading-bay zone ID (Product-specific bay zones — mirrors skuToBin above)
+const skuToBayZone: Record<string, string> = {
+  'RINA1L': 'BIN-A-BAY',
+  'PRESTIGE500G': 'BIN-B-BAY',
+  'KASUKU1KG': 'BIN-C-BAY',
+};
+
+// Recommend loading bay rack location (similar to storage recommendations) —
+// scoped to the pallet's product-specific bay zone, same as recommendStorageLocation.
 export function recommendBayLocation(
   bayRacks: Rack[],
+  sku: string,
   _palletId: string,
   pallets?: Pallet[],
 ): { rackId: string } | null {
   const SLOTS_PER_BAY_RACK = 6;
 
-  // Find first available bay rack, considering in-transit pallets
-  const availableRack = bayRacks.find((rack) => {
+  const targetZone = skuToBayZone[sku];
+  const zoneRacks = targetZone ? bayRacks.filter((r) => r.zoneId === targetZone) : bayRacks;
+
+  // Find first available bay rack in the product's zone, considering in-transit pallets
+  const availableRack = zoneRacks.find((rack) => {
     const rackedCount = rack.slots.filter((s) => s.palletId).length;
 
     // Count in-transit pallets assigned to this rack

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useWarehouseStore } from '../store/useWarehouseStore';
+import { useWarehouseStore, reservedPalletIds } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
 import { can, canAccessDepartment, getPickerType } from '../rbac';
@@ -67,6 +67,11 @@ export function LoadingBayPage() {
   const nextPalletToReceive = palletsInTransitToBay[0] ?? palletsAwaitingDirectDispatchArrival[0];
 
   const getStorageInventoryByProduct = () => {
+    // Excludes pallets already claimed by an open (non-Completed) pick task
+    // or on hold — otherwise this count includes stock a second HOD request
+    // can't actually draw on, since requestStockFromStorageToLoadingBay's own
+    // FIFO selection applies the same exclusion.
+    const reserved = reservedPalletIds(pickTasks);
     const inv: Record<string, { sku: string; name: string; count: number }> = {};
     for (const product of PRODUCTS) {
       const palletIds = racks
@@ -74,6 +79,9 @@ export function LoadingBayPage() {
         .filter((s) => s.palletId)
         .map((s) => s.palletId!) as string[];
       const count = palletIds.filter((pId) => {
+        if (reserved.has(pId)) return false;
+        const pallet = pallets.find((p) => p.id === pId);
+        if (pallet?.holdId) return false;
         const load = loads.find((l) => l.palletId === pId);
         return load?.sku === product.sku;
       }).length;
@@ -184,9 +192,10 @@ export function LoadingBayPage() {
 
     const pallet = pallets.find((p) => p.id === wizard.palletId);
     if (!pallet) return;
+    const palletSku = loads.find((l) => l.palletId === wizard.palletId)?.sku ?? '';
 
     // Get recommended bay location for this pallet
-    const freshRecommendation = recommendBayLocation(bayRacks, wizard.palletId, pallets);
+    const freshRecommendation = recommendBayLocation(bayRacks, palletSku, wizard.palletId, pallets);
     if (!freshRecommendation) {
       pushToast(`❌ No available bay rack space`, 'error');
       return;
@@ -474,7 +483,8 @@ export function LoadingBayPage() {
 
           {wizard.step === 'bay-staging' && wizard.palletId && (() => {
             const pallet = pallets.find((p) => p.id === wizard.palletId);
-            const freshRecommendation = pallet ? recommendBayLocation(bayRacks, wizard.palletId, pallets) : null;
+            const palletSku = loads.find((l) => l.palletId === wizard.palletId)?.sku ?? '';
+            const freshRecommendation = pallet ? recommendBayLocation(bayRacks, palletSku, wizard.palletId, pallets) : null;
             return (
               <>
                 <p className="text-sm text-slate-300">

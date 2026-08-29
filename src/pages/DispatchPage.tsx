@@ -42,8 +42,10 @@ export function DispatchPage() {
   });
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
-  const remaining = selectedSO ? selectedSO.qty - selectedSO.dispatchedQty : 0;
-  const available = selectedSO ? availableOnBay(selectedSO.sku) : 0;
+  const remaining = selectedSO ? selectedSO.lines.reduce((sum, l) => sum + (l.qty - l.dispatchedQty), 0) : 0;
+  const availableByLine = selectedSO
+    ? selectedSO.lines.map((l) => ({ sku: l.sku, productName: l.productName, available: availableOnBay(l.sku) }))
+    : [];
   const assignedTruck = selectedSO ? trucks.find((t) => t.id === selectedSO.assignedTruckId) : undefined;
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
@@ -51,17 +53,11 @@ export function DispatchPage() {
   const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
   const dispatchLineActuallyScanned = !!soVerification?.dispatchLineScannedAt;
 
-  const productionApproval = selectedSO
-    ? directDispatchApprovals.find(
+  const productionApprovals = selectedSO
+    ? directDispatchApprovals.filter(
         (a) => a.salesOrderId === selectedSO.id && a.source === 'Production' && a.status === 'Approved',
       )
-    : undefined;
-  const productionDirectPallets = selectedSO && productionApproval
-    ? pallets.filter(
-        (p) => p.status === 'InTransitToTruck' && loads.find((l) => l.palletId === p.id)?.sku === selectedSO.sku,
-      )
     : [];
-  const productionArrived = productionDirectPallets.filter((p) => p.directDispatchArrivedAt);
 
   // Three-stage lifecycle for a direct-dispatch pick task: moving (In
   // Progress) → arrived at the loading bay (Staged) → dispatch line scanned
@@ -97,7 +93,9 @@ export function DispatchPage() {
     ? pallets
         .filter((p) => p.status === 'InTransitToTruck')
         .map((p) => p.id)
-        .filter((palletId) => loads.find((l) => l.palletId === palletId)?.sku === selectedSO.sku)
+        .filter((palletId) =>
+          selectedSO.lines.some((l) => l.sku === loads.find((ld) => ld.palletId === palletId)?.sku),
+        )
     : [];
 
   function handleStartDispatchPicking(taskId: string) {
@@ -372,7 +370,9 @@ export function DispatchPage() {
                   {so.id} · {so.customer}
                 </div>
                 <div className="text-xs text-slate-500">
-                  {so.productName} — {so.dispatchedQty.toLocaleString()} / {so.qty.toLocaleString()} units
+                  {so.lines
+                    .map((line) => `${line.productName} ${line.dispatchedQty.toLocaleString()}/${line.qty.toLocaleString()}`)
+                    .join(', ')}
                 </div>
               </div>
               <StatusPill status={so.status} />
@@ -391,14 +391,16 @@ export function DispatchPage() {
                 <span className="text-slate-400">Remaining to dispatch</span>
                 <span className="font-medium text-slate-200">{remaining.toLocaleString()} units</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Available on bay ({selectedSO.sku})</span>
-                <span className="font-medium text-slate-200">{available.toLocaleString()} units</span>
-              </div>
+              {availableByLine.map((line) => (
+                <div key={line.sku} className="flex justify-between">
+                  <span className="text-slate-400">Available on bay ({line.sku})</span>
+                  <span className="font-medium text-slate-200">{line.available.toLocaleString()} units</span>
+                </div>
+              ))}
 
               <div className="border-t border-slate-700 pt-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Picking progress</p>
-                {soPickTasks.length === 0 && !productionApproval && (
+                {soPickTasks.length === 0 && productionApprovals.length === 0 && (
                   <p className="mt-1 text-xs text-slate-500">No picking requested yet.</p>
                 )}
                 <ul className="mt-1 space-y-1">
@@ -413,23 +415,29 @@ export function DispatchPage() {
                       <StatusPill status={pickTaskDisplayStatus(t)} />
                     </li>
                   ))}
-                  {productionApproval && (
-                    <li className="flex items-center justify-between text-xs">
-                      <span className="text-slate-300">
-                        Production Direct
-                        <span className="ml-2 text-slate-500">
-                          {productionArrived.length}/{productionDirectPallets.length} arrived
+                  {productionApprovals.map((approval) => {
+                    const productionDirectPallets = pallets.filter(
+                      (p) => p.status === 'InTransitToTruck' && loads.find((l) => l.palletId === p.id)?.sku === approval.sku,
+                    );
+                    const productionArrived = productionDirectPallets.filter((p) => p.directDispatchArrivedAt);
+                    return (
+                      <li key={approval.id} className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300">
+                          Production Direct ({approval.sku})
+                          <span className="ml-2 text-slate-500">
+                            {productionArrived.length}/{productionDirectPallets.length} arrived
+                          </span>
                         </span>
-                      </span>
-                      <StatusPill
-                        status={
-                          productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
-                            ? (dispatchLineActuallyScanned ? 'Completed' : 'Staged')
-                            : 'In Progress'
-                        }
-                      />
-                    </li>
-                  )}
+                        <StatusPill
+                          status={
+                            productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
+                              ? (dispatchLineActuallyScanned ? 'Completed' : 'Staged')
+                              : 'In Progress'
+                          }
+                        />
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
 

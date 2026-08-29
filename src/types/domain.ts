@@ -251,22 +251,36 @@ export interface Truck {
   dispatchLine: string;
 }
 
-export interface SalesOrder {
+export interface SalesOrderLine {
   id: string;
-  customer: string;
   sku: string;
   productName: string;
   qty: number;
   // Cumulative quantity the Loader has released into warehouse execution —
   // picking/dispatch-planning can never draw on more than this, regardless
-  // of how much of the order is still outstanding. Starts at 0; the Loader
+  // of how much of this line is still outstanding. Starts at 0; the Loader
   // is the mandatory first stop for every order.
   releasedQty: number;
   dispatchedQty: number;
   status: 'Pending' | 'Picking' | 'Fulfilled';
+}
+
+export interface SalesOrder {
+  id: string;
+  customer: string;
+  lines: SalesOrderLine[];
+  // Aggregate of the lines' statuses — recomputed via computeSalesOrderStatus
+  // whenever a line's status changes, kept as a stored field so existing
+  // order-level status reads don't need to recompute it themselves.
+  status: 'Pending' | 'Picking' | 'Fulfilled';
   createdAt: string;
   assignedTruckId: string | null;
-  dispatchedPalletIds: string[];
+}
+
+export function computeSalesOrderStatus(lines: SalesOrderLine[]): SalesOrder['status'] {
+  if (lines.length > 0 && lines.every((l) => l.status === 'Fulfilled')) return 'Fulfilled';
+  if (lines.some((l) => l.status === 'Picking' || l.status === 'Fulfilled')) return 'Picking';
+  return 'Pending';
 }
 
 // One row per Loader release event — the audit trail for "who released what,
@@ -274,6 +288,8 @@ export interface SalesOrder {
 export interface SalesOrderRelease {
   id: string;
   salesOrderId: string;
+  lineId: string;
+  sku: string;
   qty: number;
   releasedByUserId: string;
   releasedAt: string;
@@ -371,6 +387,8 @@ export interface RecallCase {
 export interface DirectDispatchApproval {
   id: string;
   salesOrderId: string;
+  lineId: string;
+  sku: string;
   shortfallQty: number;
   requestedByUserId: string;
   requestedAt: string;
@@ -395,6 +413,8 @@ export interface DirectDispatchApproval {
 export interface DispatchAllocation {
   id: string;
   salesOrderId: string;
+  lineId: string;
+  sku: string;
   truckId: string;
   plannedQty: number;
   dispatchedQty: number;

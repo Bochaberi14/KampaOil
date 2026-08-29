@@ -28,7 +28,6 @@ export function ProductionPage() {
   const lines = useWarehouseStore((s) => s.lines);
   const pallets = useWarehouseStore((s) => s.pallets);
   const productionOrders = useWarehouseStore((s) => s.productionOrders);
-  const salesOrders = useWarehouseStore((s) => s.salesOrders);
   const directDispatchApprovals = useWarehouseStore((s) => s.directDispatchApprovals);
   const scanLine = useWarehouseStore((s) => s.scanLine);
   const scanProductForLine = useWarehouseStore((s) => s.scanProductForLine);
@@ -186,9 +185,6 @@ export function ProductionPage() {
                   (a) => a.source === 'Production' && a.status === 'Approved' && (a.palletsRemaining ?? 0) > 0
                 );
                 if (productionDirectApprovals.length > 0) {
-                  const orders = productionDirectApprovals
-                    .map((a) => salesOrders.find((s) => s.id === a.salesOrderId))
-                    .filter(Boolean) as any[];
                   const totalPalletsRemaining = productionDirectApprovals.reduce(
                     (sum, a) => sum + (a.palletsRemaining ?? 0),
                     0,
@@ -199,7 +195,8 @@ export function ProductionPage() {
                         ⚡ Production Direct Dispatch Active
                       </p>
                       <p className="text-xs text-green-100">
-                        Next {totalPalletsRemaining} pallet{totalPalletsRemaining === 1 ? '' : 's'} will route directly to dispatch for: {orders.map((o) => o.id).join(', ')}
+                        Next {totalPalletsRemaining} pallet{totalPalletsRemaining === 1 ? '' : 's'} will route directly to dispatch for:{' '}
+                        {productionDirectApprovals.map((a) => `${a.salesOrderId} (${a.sku})`).join(', ')}
                       </p>
                     </div>
                   );

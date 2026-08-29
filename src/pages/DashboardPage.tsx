@@ -237,25 +237,37 @@ export function DashboardPage() {
           Sales orders (from SAP)
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {salesOrders.map((so) => (
-            <div key={so.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-              <div className="flex justify-between">
-                <span className="font-semibold text-slate-200">
-                  {so.id} — {so.customer}
-                </span>
-                <StatusPill status={so.status} />
+          {salesOrders.map((so) => {
+            const totalQty = so.lines.reduce((sum, l) => sum + l.qty, 0);
+            const totalDispatched = so.lines.reduce((sum, l) => sum + l.dispatchedQty, 0);
+            return (
+              <div key={so.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="flex justify-between">
+                  <span className="font-semibold text-slate-200">
+                    {so.id} — {so.customer}
+                  </span>
+                  <StatusPill status={so.status} />
+                </div>
+                <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800">
+                  <div
+                    className="h-1.5 rounded-full bg-emerald-500"
+                    style={{ width: `${Math.min(100, (totalDispatched / totalQty) * 100)}%` }}
+                  />
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {totalDispatched.toLocaleString()} / {totalQty.toLocaleString()} units · {so.lines.length}{' '}
+                  product{so.lines.length === 1 ? '' : 's'}
+                </div>
+                <div className="mt-1 space-y-0.5">
+                  {so.lines.map((line) => (
+                    <div key={line.id} className="text-xs text-slate-600">
+                      {line.productName}: {line.dispatchedQty.toLocaleString()}/{line.qty.toLocaleString()}
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800">
-                <div
-                  className="h-1.5 rounded-full bg-emerald-500"
-                  style={{ width: `${Math.min(100, (so.dispatchedQty / so.qty) * 100)}%` }}
-                />
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {so.dispatchedQty.toLocaleString()} / {so.qty.toLocaleString()} units · {so.productName}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
