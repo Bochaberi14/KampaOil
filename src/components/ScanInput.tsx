@@ -54,11 +54,32 @@ export function ScanInput({ label, placeholder, onScan, suggestions, disabled }:
         Html5QrcodeSupportedFormats.UPC_E,
         Html5QrcodeSupportedFormats.ITF,
       ];
-      scanner = new Html5Qrcode(regionId, { verbose: false, formatsToSupport: formats });
+      scanner = new Html5Qrcode(regionId, {
+        verbose: false,
+        formatsToSupport: formats,
+        // Prefer the browser's native BarcodeDetector (hardware-accelerated,
+        // Chrome/Edge) over the bundled JS decoder — it's noticeably more
+        // reliable on long/dense 1D codes like the rack labels.
+        useBarCodeDetectorIfSupported: true,
+      });
       scanner
         .start(
+          // html5-qrcode requires this object to have exactly one key
+          // (facingMode or deviceId) — the resolution hint below goes in
+          // the scan config's `videoConstraints` instead.
           { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 260, height: 160 } },
+          {
+            fps: 10,
+            // Wide, short box: these are horizontal 1D barcodes, not square
+            // QR codes, so the aiming region shouldn't force the label
+            // further from the camera than it needs to be just to fit its
+            // width in.
+            qrbox: { width: 380, height: 200 },
+            // Request a higher-resolution feed than the browser default so
+            // a long Code128 label (many thin bars) still resolves clearly
+            // — low-res webcams otherwise blur adjacent bars together.
+            videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+          },
           (decodedText) => {
             if (cancelled) return;
             cancelled = true; // stop() below is async — don't fire twice on rapid re-reads
@@ -84,7 +105,18 @@ export function ScanInput({ label, placeholder, onScan, suggestions, disabled }:
 
     return () => {
       cancelled = true;
-      scanner?.stop().then(() => scanner?.clear()).catch(() => {});
+      // This effect can be torn down while the camera is still negotiating
+      // (e.g. a slower resolution request, or this effect re-running because
+      // `submit`/`regionId` changed identity on an unrelated parent
+      // re-render) — before start() has resolved. html5-qrcode's stop()
+      // throws *synchronously* (not a rejected promise) if the scanner
+      // isn't in a running/paused state yet, and an uncaught throw from a
+      // cleanup function takes down the whole React tree. Guard it.
+      try {
+        scanner?.stop().then(() => scanner?.clear()).catch(() => {});
+      } catch {
+        // Nothing to stop/clear — it never finished starting.
+      }
     };
   }, [cameraOpen, regionId, submit]);
 

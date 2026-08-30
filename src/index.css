@@ -14,7 +14,20 @@ body {
 .print-sheet-content {
   display: none;
 }
+/* Named page for the long-ID (rack) label pages — landscape gives a long
+   Code128 code (many modules) full-width room at a wide bar width without
+   the browser auto-shrinking the SVG to fit. Falls back to the default
+   portrait @page below in browsers that don't support named pages. */
+@page rack-landscape {
+  size: A4 landscape;
+  margin: 12mm;
+}
+
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
   body * {
     visibility: hidden;
   }
@@ -30,5 +43,23 @@ body {
     width: 100%;
     background: #fff;
     color: #000;
+  }
+  /* One label-group page per sheet of paper, so categories (and long lists
+     within a category) don't get crammed together or split across a page
+     break mid-barcode. */
+  .print-page {
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  .print-label {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .print-page-wide {
+    page: rack-landscape;
   }
 }

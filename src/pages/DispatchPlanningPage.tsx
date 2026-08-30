@@ -452,18 +452,25 @@ function DispatchOrderPanel({
         </div>
       )}
 
-      {/* Generate Manifest after release — printable any time, doesn't wait on picking */}
-      {assignedTruck && showGenerateButton === order.id && !verification && (
+      {/* Generate Manifest after release — printable any time, doesn't wait on
+          picking. Stays available (as "Regenerate") after releasing more
+          lines, as long as the document hasn't started vehicle verification
+          yet — once it has, its contents are locked (see store comment). */}
+      {assignedTruck && showGenerateButton === order.id && (!verification || verification.status === 'AwaitingVerification') && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 5: Generate Dispatch Documents</p>
           <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
-            <p className="text-sm text-emerald-300">✓ Products released! Generate dispatch documents to print barcode and manifest.</p>
+            <p className="text-sm text-emerald-300">
+              {verification
+                ? '✓ More products released since the last documents were generated — regenerate to include them.'
+                : '✓ Products released! Generate dispatch documents to print barcode and manifest.'}
+            </p>
           </div>
           <button
             onClick={() => handleGenerateManifest(order.id)}
             className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
-            Generate Documents
+            {verification ? 'Regenerate Documents' : 'Generate Documents'}
           </button>
         </div>
       )}

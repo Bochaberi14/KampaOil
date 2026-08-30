@@ -13,7 +13,7 @@ export interface ProductDef {
 // assumption. Each product belongs to a department for task-routing purposes.
 // Oil & Refinery products in scope: Kasuku 1kg, Rina 1L, Prestige 500g
 export const PRODUCTS: ProductDef[] = [
-  { sku: 'KASUKU1KG', name: 'Kasuku 1kg', unitsPerPallet: 100, department: 'Oil & Refinery' },
+  { sku: 'KASUKU1KG', name: 'Kasuku 1kg', unitsPerPallet: 120, department: 'Oil & Refinery' },
   { sku: 'RINA1L', name: 'Rina 1L', unitsPerPallet: 100, department: 'Oil & Refinery' },
   { sku: 'PRESTIGE500G', name: 'Prestige 500g', unitsPerPallet: 150, department: 'Oil & Refinery' },
 ];

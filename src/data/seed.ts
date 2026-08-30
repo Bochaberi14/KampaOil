@@ -173,8 +173,8 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     customer: 'Joy',
     lines: [
       { id: 'SO001-L1', sku: 'RINA1L', productName: 'Rina 1L', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
-      { id: 'SO001-L2', sku: 'KASUKU1KG', productName: 'Kasuku 1kg', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
-      { id: 'SO001-L3', sku: 'PRESTIGE500G', productName: 'Prestige 500g', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
+      { id: 'SO001-L2', sku: 'KASUKU1KG', productName: 'Kasuku 1kg', qty: 600, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
+      { id: 'SO001-L3', sku: 'PRESTIGE500G', productName: 'Prestige 500g', qty: 750, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:00:00.000Z',
@@ -185,7 +185,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     customer: 'Laura',
     lines: [
       { id: 'SO002-L1', sku: 'RINA1L', productName: 'Rina 1L', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
-      { id: 'SO002-L2', sku: 'KASUKU1KG', productName: 'Kasuku 1kg', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
+      { id: 'SO002-L2', sku: 'KASUKU1KG', productName: 'Kasuku 1kg', qty: 600, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:15:00.000Z',
@@ -195,7 +195,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     id: 'SO003',
     customer: 'Tasha',
     lines: [
-      { id: 'SO003-L1', sku: 'PRESTIGE500G', productName: 'Prestige 500g', qty: 500, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
+      { id: 'SO003-L1', sku: 'PRESTIGE500G', productName: 'Prestige 500g', qty: 750, releasedQty: 0, dispatchedQty: 0, status: 'Pending' },
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:25:00.000Z',

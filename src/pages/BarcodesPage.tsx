@@ -26,15 +26,63 @@ function ScreenGrid({ title, ids, note }: LabelGroup) {
   );
 }
 
-function PrintGrid({ ids }: { ids: string[] }) {
+function chunk<T>(items: T[], size: number): T[][] {
+  const pages: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    pages.push(items.slice(i, i + size));
+  }
+  return pages;
+}
+
+// Longer IDs (e.g. rack codes like BIN-A-BAY-S-01-R-01) encode to a much wider
+// Code128 barcode. In a 2-column layout that width overflows the column, and
+// the SVG's `maxWidth: 100%, height: auto` scales the whole thing down to fit
+// — shrinking the height along with it, which is why those labels rendered
+// tiny. Give long IDs a full-width single column instead, so the barcode
+// never needs to be scaled down from its requested size.
+const LONG_ID_THRESHOLD = 14;
+
+function pickLayout(ids: string[]) {
+  const maxLen = ids.reduce((m, id) => Math.max(m, id.length), 0);
+  if (maxLen > LONG_ID_THRESHOLD) {
+    // Bar width matters more than overall size for scanability — a longer ID
+    // encodes to more modules, so keeping a wider bar width than the
+    // short-ID groups (not thinner) is what actually keeps it readable by a
+    // webcam. Landscape + single column is what makes room for that width
+    // without the SVG getting auto-shrunk; perPage is lower since the
+    // tradeoff is less page height to work with.
+    return { columns: 1, perPage: 3, height: 120, fontSize: 22, barWidth: 3.5 };
+  }
+  return { columns: 2, perPage: 6, height: 90, fontSize: 20, barWidth: 3 };
+}
+
+// One category per page (or several pages, for long lists), a handful of
+// large labels per page so each barcode has room to be scanned reliably by a
+// webcam.
+function PrintPages({ title, ids }: LabelGroup) {
+  const { columns, perPage, height, fontSize, barWidth } = pickLayout(ids);
+  const pages = chunk(ids, perPage);
   return (
-    <div className="grid grid-cols-3 gap-4">
-      {ids.map((id) => (
-        <div key={id} className="flex items-center justify-center border border-dashed border-slate-400 p-2">
-          <Barcode value={id} height={40} fontSize={12} />
+    <>
+      {pages.map((pageIds, i) => (
+        <div key={i} className={`print-page${columns === 1 ? ' print-page-wide' : ''}`}>
+          <h2 className="mb-4 text-lg font-bold">
+            {title}
+            {pages.length > 1 ? ` (page ${i + 1} of ${pages.length})` : ''}
+          </h2>
+          <div className={`grid gap-6 ${columns === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+            {pageIds.map((id) => (
+              <div
+                key={id}
+                className="print-label flex items-center justify-center border border-dashed border-slate-400 p-3"
+              >
+                <Barcode value={id} height={height} fontSize={fontSize} barWidth={barWidth} />
+              </div>
+            ))}
+          </div>
         </div>
       ))}
-    </div>
+    </>
   );
 }
 
@@ -74,12 +122,9 @@ export function BarcodesPage() {
           </p>
         </div>
         <PrintSheet title="Kapa Oil WMS — Barcode labels" triggerLabel="Print all as labels">
-          <div className="space-y-6">
+          <div>
             {groups.map((g) => (
-              <div key={g.title}>
-                <h2 className="mb-2 text-sm font-semibold">{g.title}</h2>
-                <PrintGrid ids={g.ids} />
-              </div>
+              <PrintPages key={g.title} title={g.title} ids={g.ids} />
             ))}
           </div>
         </PrintSheet>

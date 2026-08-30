@@ -2188,9 +2188,15 @@ export const useWarehouseStore = create<WarehouseState>()(
         const truck = state.trucks.find((t) => t.id === so.assignedTruckId);
         if (!truck) return err(`Truck not found`);
 
-        // Check if verification already exists
+        // If a document was already generated, only regenerate its contents
+        // while it's still AwaitingVerification — the Loader may have
+        // released/picked additional lines since the first generation and
+        // needs the reprint to include them. Once the vehicle/line
+        // verification has started against a specific printed manifest,
+        // its contents are locked — regenerating now would silently change
+        // what the driver already checked against.
         const existing = state.dispatchVerifications.find((v) => v.salesOrderId === salesOrderId);
-        if (existing) {
+        if (existing && existing.status !== 'AwaitingVerification') {
           return ok({ verification: existing });
         }
 
@@ -2266,31 +2272,35 @@ export const useWarehouseStore = create<WarehouseState>()(
         );
 
         const now = new Date().toISOString();
-        const verification: DispatchVerification = {
-          id: generateVerificationId(),
-          salesOrderId,
-          truckId: truck.id,
-          vehicleBarcode: truck.dispatchBarcode ?? '',
-          dispatchLine: truck.dispatchLine,
-          customer: so.customer,
-          products,
-          palletIds,
-          loaderUserId: allocation?.createdByUserId ?? null,
-          pickerUserIds,
-          stagedAt: now,
-          stagedByUserId: operatorId,
-          dispatchLineScannedAt: null,
-          dispatchLineScannedByUserId: null,
-          vehicleVerifiedAt: null,
-          vehicleVerifiedByUserId: null,
-          driverName: null,
-          driverSignedAt: null,
-          loaderSignedByUserId: null,
-          loaderSignedAt: null,
-          status: 'AwaitingVerification',
-        };
+        const verification: DispatchVerification = existing
+          ? { ...existing, products, palletIds, pickerUserIds }
+          : {
+              id: generateVerificationId(),
+              salesOrderId,
+              truckId: truck.id,
+              vehicleBarcode: truck.dispatchBarcode ?? '',
+              dispatchLine: truck.dispatchLine,
+              customer: so.customer,
+              products,
+              palletIds,
+              loaderUserId: allocation?.createdByUserId ?? null,
+              pickerUserIds,
+              stagedAt: now,
+              stagedByUserId: operatorId,
+              dispatchLineScannedAt: null,
+              dispatchLineScannedByUserId: null,
+              vehicleVerifiedAt: null,
+              vehicleVerifiedByUserId: null,
+              driverName: null,
+              driverSignedAt: null,
+              loaderSignedByUserId: null,
+              loaderSignedAt: null,
+              status: 'AwaitingVerification',
+            };
         set((state) => ({
-          dispatchVerifications: [...state.dispatchVerifications, verification],
+          dispatchVerifications: existing
+            ? state.dispatchVerifications.map((v) => (v.id === verification.id ? verification : v))
+            : [...state.dispatchVerifications, verification],
           pallets: state.pallets.map((p) => {
             if (palletIds.includes(p.id) && p.status === 'InTransitToTruck') {
               return { ...p, status: 'StagedForDispatch', location: { type: 'DispatchLine', dispatchLine: truck.dispatchLine, truckId: so.assignedTruckId! } };
@@ -2299,7 +2309,9 @@ export const useWarehouseStore = create<WarehouseState>()(
           }),
         }));
         get().pushToast(
-          `Manifest generated for ${salesOrderId} — ${pickedQty.toLocaleString()} units ready to stage`,
+          existing
+            ? `Manifest regenerated for ${salesOrderId} — ${pickedQty.toLocaleString()} units ready to stage`
+            : `Manifest generated for ${salesOrderId} — ${pickedQty.toLocaleString()} units ready to stage`,
           'success',
         );
         return ok({ verification });
@@ -2410,6 +2422,24 @@ export const useWarehouseStore = create<WarehouseState>()(
         };
         set((state) => ({
           dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === verificationId ? updated : v)),
+          // Handover is now physically signed off — this is the one point
+          // where staged goods actually become "dispatched," so each line's
+          // dispatchedQty finally advances (previously never written), and a
+          // line/order that's now fully dispatched flips to Fulfilled.
+          salesOrders: state.salesOrders.map((s) => {
+            if (s.id !== verification.salesOrderId) return s;
+            const lines = s.lines.map((l) => {
+              const product = verification.products.find((p) => p.sku === l.sku);
+              if (!product || product.pickedQty <= 0) return l;
+              const dispatchedQty = l.dispatchedQty + product.pickedQty;
+              return {
+                ...l,
+                dispatchedQty,
+                status: dispatchedQty >= l.qty ? 'Fulfilled' as const : l.status,
+              };
+            });
+            return { ...s, lines, status: computeSalesOrderStatus(lines) };
+          }),
         }));
         get().pushToast(`Dispatch verification ${verificationId} signed — handover complete`, 'success');
         get().enqueueSapSync(
@@ -2976,7 +3006,7 @@ export const useWarehouseStore = create<WarehouseState>()(
       },
     }),
     {
-      name: 'kapaoil-warehouse-demo-v4',
+      name: 'kapaoil-warehouse-demo-v5',
       partialize: (state) => {
         const { toasts: _toasts, sapSyncing: _sapSyncing, ...rest } = state;
         return rest;

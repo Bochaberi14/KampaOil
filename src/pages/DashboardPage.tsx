@@ -255,13 +255,12 @@ export function DashboardPage() {
                   />
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
-                  {totalDispatched.toLocaleString()} / {totalQty.toLocaleString()} units · {so.lines.length}{' '}
-                  product{so.lines.length === 1 ? '' : 's'}
+                  {totalQty.toLocaleString()} units · {so.lines.length} product{so.lines.length === 1 ? '' : 's'}
                 </div>
                 <div className="mt-1 space-y-0.5">
                   {so.lines.map((line) => (
                     <div key={line.id} className="text-xs text-slate-600">
-                      {line.productName}: {line.dispatchedQty.toLocaleString()}/{line.qty.toLocaleString()}
+                      {line.productName}: {line.qty.toLocaleString()} units
                     </div>
                   ))}
                 </div>
