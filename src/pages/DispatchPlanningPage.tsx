@@ -51,7 +51,6 @@ export function DispatchPlanningPage() {
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
   const [plateConfirmed, setPlateConfirmed] = useState(false);
-  const [showGenerateButton, setShowGenerateButton] = useState<string | null>(null);
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
   const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
@@ -124,7 +123,6 @@ export function DispatchPlanningPage() {
       pushToast(result.error, 'error');
     } else {
       pushToast('✓ Dispatch documents generated — ready to print', 'success');
-      setShowGenerateButton(null);
     }
   }
 
@@ -226,8 +224,6 @@ export function DispatchPlanningPage() {
               availableOnBay={availableOnBay}
               availableInStorage={availableInStorage}
               handleGenerateManifest={handleGenerateManifest}
-              showGenerateButton={showGenerateButton}
-              setShowGenerateButton={setShowGenerateButton}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -260,13 +256,10 @@ function DispatchOrderPanel({
   availableOnBay,
   availableInStorage,
   handleGenerateManifest,
-  showGenerateButton,
-  setShowGenerateButton,
   directDispatchApprovals,
 }: any) {
   const trucks = useWarehouseStore((s) => s.trucks);
   const pallets = useWarehouseStore((s) => s.pallets);
-  const loads = useWarehouseStore((s) => s.loads);
   const assignedTruck = order.assignedTruckId ? trucks.find((t: any) => t.id === order.assignedTruckId) : undefined;
   const bucket = orderBucket(order);
   const totals = orderTotals(order);
@@ -418,7 +411,6 @@ function DispatchOrderPanel({
                 availableOnBay={availableOnBay}
                 availableInStorage={availableInStorage}
                 directDispatchApprovals={directDispatchApprovals}
-                onReleased={() => setShowGenerateButton(order.id)}
               />
             ))}
           </div>
@@ -436,10 +428,20 @@ function DispatchOrderPanel({
             </p>
           ))}
           {productionApprovals.map((approval: any) => {
+            // Track by the approval id the pallet was tagged with at
+            // confirmLoad time, not just SKU+status — regenerating the
+            // manifest promotes an arrived pallet from InTransitToTruck to
+            // StagedForDispatch, and a SKU+'InTransitToTruck' filter alone
+            // loses track of it right at that point, making progress that
+            // just advanced (to Staged) look like it reset to "In Progress".
             const productionDirectPallets = pallets.filter(
-              (p: any) => p.status === 'InTransitToTruck' && loads.find((l: any) => l.palletId === p.id)?.sku === approval.sku,
+              (p: any) =>
+                p.productionDirectDispatchApprovalId === approval.id &&
+                (p.status === 'InTransitToTruck' || p.status === 'StagedForDispatch'),
             );
-            const productionArrived = productionDirectPallets.filter((p: any) => p.directDispatchArrivedAt);
+            const productionArrived = productionDirectPallets.filter(
+              (p: any) => p.status === 'StagedForDispatch' || p.directDispatchArrivedAt,
+            );
             return (
               <p key={approval.id} className="text-xs text-emerald-200">
                 • Production Direct ({approval.sku}) — {productionArrived.length}/{productionDirectPallets.length} pallet(s) arrived at bay
@@ -453,16 +455,19 @@ function DispatchOrderPanel({
       )}
 
       {/* Generate Manifest after release — printable any time, doesn't wait on
-          picking. Stays available (as "Regenerate") after releasing more
-          lines, as long as the document hasn't started vehicle verification
-          yet — once it has, its contents are locked (see store comment). */}
-      {assignedTruck && showGenerateButton === order.id && (!verification || verification.status === 'AwaitingVerification') && (
+          picking, and always available to (re)generate as long as the
+          document hasn't started vehicle verification yet — once it has,
+          its contents are locked (see store comment). Not gated on "just
+          released more" — more pallets can become ready (arrive at the bay,
+          finish a pick) without a new release, and the Loader should be able
+          to pull those into the manifest just as freely. */}
+      {assignedTruck && totals.releasedQty > 0 && (!verification || verification.status === 'AwaitingVerification') && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 5: Generate Dispatch Documents</p>
           <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
             <p className="text-sm text-emerald-300">
               {verification
-                ? '✓ More products released since the last documents were generated — regenerate to include them.'
+                ? '✓ Regenerate to pull in anything released or readied since these documents were generated.'
                 : '✓ Products released! Generate dispatch documents to print barcode and manifest.'}
             </p>
           </div>
@@ -508,7 +513,6 @@ function LineReleasePanel({
   availableOnBay,
   availableInStorage,
   directDispatchApprovals,
-  onReleased,
 }: any) {
   const currentUser = useWarehouseStore((s) => s.currentUser);
   const releaseSalesOrderQuantity = useWarehouseStore((s) => s.releaseSalesOrderQuantity);
@@ -532,6 +536,21 @@ function LineReleasePanel({
         ✓ {line.productName} ({line.sku}) — fully released
       </div>
     );
+  }
+
+  // Where a given quantity would be picked from, in priority order: bay
+  // stock first, then storage, then whatever's left is the Production
+  // shortfall. Shared by the "sourcing" guidance, the direct-dispatch
+  // checkboxes, and the picker-assignment gate below, so they can't drift
+  // apart on the same numbers.
+  function computeSourcing(qtyNeeded: number) {
+    const bayAvail = availableOnBay(line.sku);
+    const storageAvail = availableInStorage(line.sku);
+    const fromBay = Math.min(bayAvail, qtyNeeded);
+    const afterBay = qtyNeeded - fromBay;
+    const fromStorage = Math.min(storageAvail, afterBay);
+    const fromProd = afterBay - fromStorage;
+    return { bayAvail, storageAvail, fromBay, fromStorage, fromProd };
   }
 
   function handleAddPickerRow() {
@@ -566,7 +585,18 @@ function LineReleasePanel({
       .map((r) => ({ pickerId: r.pickerId, qty: Number(r.qty) }));
 
     const allAssignments = [...bayAssignments, ...storageAssignments];
-    if (allAssignments.length === 0) {
+
+    // Production Direct Dispatch needs no picker at all — the pallet is
+    // pulled straight off the line and routed to dispatch when it's scanned
+    // leaving production, with nobody assigned to "pick" it. Only require a
+    // picker for whatever this release still needs from bay/storage once
+    // that's accounted for.
+    const needed = Number(releaseQty) || 0;
+    const { fromProd } = computeSourcing(needed);
+    const productionCoveredQty = directDispatchRequests.has('Production') ? fromProd : 0;
+    const needsPickerAssignment = needed - productionCoveredQty > 0;
+
+    if (allAssignments.length === 0 && needsPickerAssignment) {
       pushToast('Add at least one picker', 'error');
       return false;
     }
@@ -658,7 +688,6 @@ function LineReleasePanel({
     }
 
     pushToast(`Released ${parsedQty} units of ${line.productName} for ${order.id}`, 'success');
-    onReleased();
     setReleaseQty('');
     setDirectDispatchRequests(new Set());
     setProductionPalletCount('1');
@@ -676,13 +705,8 @@ function LineReleasePanel({
 
       {/* Pickers will source from - guidance shown before AND after entering quantity */}
       {(() => {
-        const bayAvail = availableOnBay(line.sku);
-        const storageAvail = availableInStorage(line.sku);
         const needed = releaseQty ? Number(releaseQty) : remainingToRelease;
-        const fromBay = Math.min(bayAvail, needed);
-        const remainingAfterBay = needed - fromBay;
-        const fromStorage = Math.min(storageAvail, remainingAfterBay);
-        const fromProd = remainingAfterBay - fromStorage;
+        const { bayAvail, storageAvail, fromBay, fromStorage, fromProd } = computeSourcing(needed);
         return (
           <div className="rounded-lg bg-slate-800/60 p-3 text-xs text-slate-300">
             <p className="font-semibold mb-1">Pickers will source from:</p>
@@ -720,14 +744,10 @@ function LineReleasePanel({
 
       {/* Request Direct Dispatch - only when the release qty exceeds what's on the bay */}
       {releaseQty && (() => {
-        const bayAvail = availableOnBay(line.sku);
-        const storageAvail = availableInStorage(line.sku);
         const needed = Number(releaseQty);
-        const shortfall = needed - bayAvail;
+        const { bayAvail, fromBay, fromStorage, fromProd } = computeSourcing(needed);
+        const shortfall = needed - fromBay;
         if (shortfall <= 0) return null;
-
-        const fromStorage = Math.min(storageAvail, shortfall);
-        const fromProd = shortfall - fromStorage;
 
         return (
           <div className="rounded-lg border border-green-800/50 bg-green-900/20 p-3 space-y-3">

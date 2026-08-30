@@ -212,6 +212,9 @@ export function DispatchPage() {
       return;
     }
 
+    // The plate/id match above confirms it's the right vehicle; scanDispatchLine
+    // is what actually advances dispatchedQty/Fulfilled now that both the line
+    // and vehicle are confirmed (see its comment in the store).
     const result = scanDispatchLine({
       salesOrderId: selectedSO.id,
       dispatchLineCode: assignedTruck.dispatchLine,
@@ -222,7 +225,7 @@ export function DispatchPage() {
       return;
     }
 
-    pushToast(`✓ Dispatch verified! Order ready for completion.`, 'success');
+    pushToast(`✓ Dispatch verified! Order complete.`, 'success');
     setDispatchLineScanned(false);
   }
 
@@ -416,10 +419,21 @@ export function DispatchPage() {
                     </li>
                   ))}
                   {productionApprovals.map((approval) => {
+                    // Track by the approval id the pallet was tagged with at
+                    // confirmLoad time, not just SKU+status — regenerating
+                    // the manifest promotes an arrived pallet from
+                    // InTransitToTruck to StagedForDispatch, and a
+                    // SKU+'InTransitToTruck' filter alone loses track of it
+                    // right at that point, making progress that just
+                    // advanced (to Staged) look like it reset to "In Progress".
                     const productionDirectPallets = pallets.filter(
-                      (p) => p.status === 'InTransitToTruck' && loads.find((l) => l.palletId === p.id)?.sku === approval.sku,
+                      (p) =>
+                        p.productionDirectDispatchApprovalId === approval.id &&
+                        (p.status === 'InTransitToTruck' || p.status === 'StagedForDispatch'),
                     );
-                    const productionArrived = productionDirectPallets.filter((p) => p.directDispatchArrivedAt);
+                    const productionArrived = productionDirectPallets.filter(
+                      (p) => p.status === 'StagedForDispatch' || p.directDispatchArrivedAt,
+                    );
                     return (
                       <li key={approval.id} className="flex items-center justify-between text-xs">
                         <span className="text-slate-300">

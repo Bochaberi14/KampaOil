@@ -2241,9 +2241,17 @@ export const useWarehouseStore = create<WarehouseState>()(
             }
           }
           selectedPallets.push(...lineSelected);
-          const linePickedQty = lineSelected
-            .filter((p) => p.status === 'StagedForDispatch')
-            .reduce((sum, p) => sum + (state.loads.find((l) => l.palletId === p.id)?.quantity ?? 0), 0);
+          // Every pallet in lineSelected is already confirmed ready for this
+          // truck (on bay, staged, or arrived-for-direct-dispatch) — that's
+          // what's actually going out on it, not just whatever already
+          // happens to carry a 'StagedForDispatch' status at this exact
+          // moment (that undercounted anything not yet physically walked to
+          // the dispatch line by a previous generation, which then silently
+          // capped how much this order could ever be marked dispatched).
+          const linePickedQty = lineSelected.reduce(
+            (sum, p) => sum + (state.loads.find((l) => l.palletId === p.id)?.quantity ?? 0),
+            0,
+          );
           if (line.releasedQty > 0 || linePickedQty > 0) {
             products.push({
               sku: line.sku,
@@ -2317,14 +2325,13 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ verification });
       },
 
-      // Picking-complete verification: the Picker scans LINE 001 once every
-      // assigned pick task is Completed. The vehicle itself is checked only
-      // for "has one been registered yet" here — the Loader verifies its
-      // actual identity afterward via verifyDispatchVehicle. On success,
-      // every ready pallet (OnBay from the normal path, or InTransitToTruck
-      // from a Storage-shortfall/Production-bypass exception) is staged —
-      // never emptied, never "in" the truck — and the handover printout is
-      // generated.
+      // Picking-complete verification: the Picker scans LINE 001, then the
+      // vehicle (checked client-side against the assigned truck in
+      // DispatchPage.tsx before this is ever called) — that's the actual
+      // "both confirmed" moment in this app's only working dispatch-scan
+      // flow, so each line's dispatchedQty advances here, and a line/order
+      // that's now fully dispatched flips to Fulfilled. (See the note on
+      // verifyDispatchVehicle — don't duplicate this there too.)
       scanDispatchLine: (args) => {
         const { salesOrderId, dispatchLineCode, operatorId } = args;
         const state = get();
@@ -2356,15 +2363,39 @@ export const useWarehouseStore = create<WarehouseState>()(
         };
         set((state) => ({
           dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === updated.id ? updated : v)),
+          salesOrders: state.salesOrders.map((s) => {
+            if (s.id !== verification.salesOrderId) return s;
+            const lines = s.lines.map((l) => {
+              const product = verification.products.find((p) => p.sku === l.sku);
+              if (!product || product.pickedQty <= 0) return l;
+              const dispatchedQty = l.dispatchedQty + product.pickedQty;
+              return {
+                ...l,
+                dispatchedQty,
+                status: dispatchedQty >= l.qty ? 'Fulfilled' as const : l.status,
+              };
+            });
+            return { ...s, lines, status: computeSalesOrderStatus(lines) };
+          }),
         }));
-
-        get().pushToast(`✓ Dispatch line verified. Ready to scan vehicle barcode.`, 'success');
+        get().enqueueSapSync(
+          'DispatchVerified',
+          `Vehicle verified — dispatch complete for ${salesOrderId}, truck ${truck.id}`,
+        );
+        get().pushToast(`✓ Dispatch line verified — goods dispatched.`, 'success');
         return ok({ verification: updated });
       },
 
       // Loader-only: scans the vehicle's own barcode (generated at
       // registration) to verify it's actually the vehicle associated with
-      // this sales order before anyone signs anything.
+      // this sales order before anyone signs anything. NOTE: no current UI
+      // calls this — the only working "scan line + scan vehicle" flow is the
+      // Picker-executed one in DispatchPage.tsx, which verifies the vehicle
+      // client-side and only calls scanDispatchLine (that's where
+      // dispatchedQty/Fulfilled actually advance now). This stays available,
+      // unchanged, for whenever a Loader-facing verification UI exists —
+      // don't also advance dispatchedQty here without removing it from
+      // scanDispatchLine first, or a real caller of both would double-count.
       verifyDispatchVehicle: ({ verificationId, vehicleBarcode, operatorId }) => {
         const state = get();
         if (!can(state.currentUser?.role, 'plan:dispatch')) {
@@ -2398,7 +2429,9 @@ export const useWarehouseStore = create<WarehouseState>()(
 
       // Loader + Driver both confirm the goods staged at the dispatch line
       // match the printout — no separate Stock HOD step. Captured together in
-      // one action since both confirmations happen at the same moment.
+      // one action since both confirmations happen at the same moment. Goods
+      // are already counted as dispatched as of the vehicle scan above; this
+      // step is the physical paperwork trailing behind that.
       signDispatchVerification: ({ verificationId, driverName, operatorId }) => {
         const state = get();
         if (!can(state.currentUser?.role, 'sign:dispatch')) {
@@ -2422,30 +2455,8 @@ export const useWarehouseStore = create<WarehouseState>()(
         };
         set((state) => ({
           dispatchVerifications: state.dispatchVerifications.map((v) => (v.id === verificationId ? updated : v)),
-          // Handover is now physically signed off — this is the one point
-          // where staged goods actually become "dispatched," so each line's
-          // dispatchedQty finally advances (previously never written), and a
-          // line/order that's now fully dispatched flips to Fulfilled.
-          salesOrders: state.salesOrders.map((s) => {
-            if (s.id !== verification.salesOrderId) return s;
-            const lines = s.lines.map((l) => {
-              const product = verification.products.find((p) => p.sku === l.sku);
-              if (!product || product.pickedQty <= 0) return l;
-              const dispatchedQty = l.dispatchedQty + product.pickedQty;
-              return {
-                ...l,
-                dispatchedQty,
-                status: dispatchedQty >= l.qty ? 'Fulfilled' as const : l.status,
-              };
-            });
-            return { ...s, lines, status: computeSalesOrderStatus(lines) };
-          }),
         }));
-        get().pushToast(`Dispatch verification ${verificationId} signed — handover complete`, 'success');
-        get().enqueueSapSync(
-          'DispatchVerified',
-          `Handover complete — ${verification.salesOrderId}, truck ${verification.truckId}`,
-        );
+        get().pushToast(`Dispatch verification ${verificationId} signed — handover paperwork complete`, 'success');
         return ok({ verification: updated });
       },
 

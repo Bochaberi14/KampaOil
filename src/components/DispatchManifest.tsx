@@ -44,7 +44,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
           {verification.products.map((product) => {
             const pallets = Math.ceil(product.releasedQty / unitsPerPallet(product.sku));
             return (
-              <div key={product.sku} className="grid grid-cols-4 gap-4 text-sm py-2 border-b border-gray-300">
+              <div key={product.sku} className="grid grid-cols-3 gap-4 text-sm py-2 border-b border-gray-300">
                 <div>
                   <p className="font-medium">{product.productName}</p>
                   <p className="text-xs text-gray-600">{product.sku}</p>
@@ -56,9 +56,6 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
                 <div className="text-right">
                   <p className="text-xs">Ordered: {product.orderedQty}</p>
                   <p className="text-xs">Released: {product.releasedQty}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs">Picked: {product.pickedQty}</p>
                 </div>
               </div>
             );
@@ -82,7 +79,7 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
                 <div className="flex-1">
                   <p className="font-medium">{product.productName}</p>
                   <p className="text-xs text-gray-600">
-                    {product.releasedQty} units ({pallets} pallets) released — {product.pickedQty} picked so far
+                    Ordered {product.orderedQty} — {product.releasedQty} units ({pallets} pallets) released
                   </p>
                 </div>
               </div>
