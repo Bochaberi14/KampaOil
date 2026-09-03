@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { PRODUCTS } from '../data/products';
 import { DEPARTMENTS } from '../data/seed';
@@ -53,6 +53,14 @@ export function ReturnsPage() {
   const [processingPhoto, setProcessingPhoto] = useState(false);
   const [reviewingReturnId, setReviewingReturnId] = useState<string | null>(null);
   const [selectedDecision, setSelectedDecision] = useState<'Scrap' | 'Restock' | 'Replace' | ''>('');
+  // Live webcam capture, as an alternative to picking an existing file — the
+  // upload input's `capture="environment"` only opens a camera directly on
+  // mobile; on desktop it's just a normal file browser, so there was
+  // otherwise no way to snap a photo on the spot with a webcam.
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const selectedProduct = PRODUCTS.find((p) => p.sku === sku) ?? null;
 
@@ -68,6 +76,50 @@ export function ReturnsPage() {
     } finally {
       setProcessingPhoto(false);
     }
+  }
+
+  useEffect(() => {
+    if (!cameraOpen) return;
+    let cancelled = false;
+    navigator.mediaDevices
+      ?.getUserMedia({ video: { facingMode: 'environment' } })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : String(e);
+        setCameraError(
+          /permission|denied/i.test(message)
+            ? 'Camera permission denied — allow camera access and try again, or upload a photo instead.'
+            : `Could not start the camera: ${message}`,
+        );
+        setCameraOpen(false);
+      });
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, [cameraOpen]);
+
+  function handleCapturePhoto() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const scale = Math.min(1, MAX_PHOTO_WIDTH / video.videoWidth);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setPhotoDataUrl(canvas.toDataURL('image/jpeg', 0.8));
+    setCameraOpen(false);
   }
 
   function handleSubmit() {
@@ -192,15 +244,58 @@ export function ReturnsPage() {
 
           <div className="space-y-2">
             <label className="block text-sm font-medium text-slate-300">Photo of the defect</label>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={handlePhotoChange}
-              className="w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-200 hover:file:bg-slate-700"
-            />
+
+            {cameraOpen ? (
+              <div className="space-y-2">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full rounded-lg border border-indigo-500 bg-black"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCapturePhoto}
+                    className="flex-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                  >
+                    📸 Capture
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraOpen(false)}
+                    className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoChange}
+                  className="flex-1 text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-200 hover:file:bg-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCameraError(null);
+                    setCameraOpen(true);
+                  }}
+                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  📷 Take Photo
+                </button>
+              </div>
+            )}
+
+            {cameraError && <p className="text-xs text-rose-400">{cameraError}</p>}
             {processingPhoto && <p className="text-xs text-slate-500">Processing photo…</p>}
-            {photoDataUrl && !processingPhoto && (
+            {photoDataUrl && !processingPhoto && !cameraOpen && (
               <img src={photoDataUrl} alt="Defect preview" className="max-h-40 rounded-lg border border-slate-800" />
             )}
           </div>
