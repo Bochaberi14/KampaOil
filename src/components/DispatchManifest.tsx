@@ -17,9 +17,15 @@ interface DispatchManifestProps {
   // batches it was released in, rather than one combined number that hides
   // that the order went out in stages.
   releases?: SalesOrderRelease[];
+  // Every vehicle that has ever served this order (active or departed), for
+  // the all-inclusive view only — an order can be split across several
+  // vehicles, so that view lists them all rather than just the one
+  // currently selected. When provided (and non-empty) this replaces the
+  // single vehiclePlate/driverName/dispatch-line fields above.
+  vehicles?: { plate: string; driverName: string | null; dispatchLine: string }[];
 }
 
-export function DispatchManifest({ verification, loaderName, vehiclePlate, driverName, subtitle, releases }: DispatchManifestProps) {
+export function DispatchManifest({ verification, loaderName, vehiclePlate, driverName, subtitle, releases, vehicles }: DispatchManifestProps) {
   return (
     <div className="space-y-6 bg-white p-12 text-black">
       {/* Header */}
@@ -39,18 +45,37 @@ export function DispatchManifest({ verification, loaderName, vehiclePlate, drive
           <p className="font-semibold">Customer</p>
           <p className="text-lg">{verification.customer}</p>
         </div>
-        <div>
-          <p className="font-semibold">Vehicle Number Plate</p>
-          <p className="text-lg font-mono">{vehiclePlate}</p>
-        </div>
-        <div>
-          <p className="font-semibold">Driver</p>
-          <p className="text-lg">{driverName || 'Not recorded'}</p>
-        </div>
-        <div>
-          <p className="font-semibold">Dispatch Line</p>
-          <p className="text-lg">{verification.dispatchLine}</p>
-        </div>
+        {!vehicles || vehicles.length === 0 ? (
+          <>
+            <div>
+              <p className="font-semibold">Vehicle Number Plate</p>
+              <p className="text-lg font-mono">{vehiclePlate}</p>
+            </div>
+            <div>
+              <p className="font-semibold">Driver</p>
+              <p className="text-lg">{driverName || 'Not recorded'}</p>
+            </div>
+            <div>
+              <p className="font-semibold">Dispatch Line</p>
+              <p className="text-lg">{verification.dispatchLine}</p>
+            </div>
+          </>
+        ) : (
+          <div className="col-span-2">
+            <p className="font-semibold mb-1">
+              Vehicle{vehicles.length > 1 ? 's' : ''} ({vehicles.length})
+            </p>
+            <div className="space-y-1">
+              {vehicles.map((v, i) => (
+                <p key={i} className="text-sm">
+                  <span className="font-mono font-semibold">{v.plate}</span>
+                  {' — '}{v.driverName || 'Driver not recorded'}
+                  {' — '}{v.dispatchLine}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Released Items Checklist — kept deliberately simple: just what was

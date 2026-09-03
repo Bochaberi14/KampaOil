@@ -63,6 +63,11 @@ export function DispatchPlanningPage() {
   const activeTrucksForSelectedSO = selectedSO
     ? trucks.filter((t) => selectedSO.assignedTruckIds.includes(t.id))
     : [];
+  // Every vehicle that has EVER served this order, active or departed —
+  // Truck.salesOrderId is set once at registration and never cleared, so
+  // unlike assignedTruckIds (current only) this is the full history, for
+  // the all-inclusive manifest.
+  const allTrucksForSelectedSO = selectedSO ? trucks.filter((t) => t.salesOrderId === selectedSO.id) : [];
   const effectiveTruckId =
     selectedTruckId && activeTrucksForSelectedSO.some((t) => t.id === selectedTruckId)
       ? selectedTruckId
@@ -255,6 +260,7 @@ export function DispatchPlanningPage() {
               availableInStorage={availableInStorage}
               handleGenerateManifest={handleGenerateManifest}
               activeTrucks={activeTrucksForSelectedSO}
+              allTrucks={allTrucksForSelectedSO}
               selectedTruckId={effectiveTruckId}
               setSelectedTruckId={setSelectedTruckId}
             />
@@ -291,6 +297,7 @@ function DispatchOrderPanel({
   handleGenerateManifest,
   directDispatchApprovals,
   activeTrucks,
+  allTrucks,
   selectedTruckId,
   setSelectedTruckId,
 }: any) {
@@ -590,6 +597,7 @@ function DispatchOrderPanel({
               driverName={selectedTruck?.driverName ?? null}
               subtitle="Full order — all releases to date"
               releases={salesOrderReleases.filter((r: any) => r.salesOrderId === order.id)}
+              vehicles={allTrucks.map((t: any) => ({ plate: t.plate, driverName: t.driverName, dispatchLine: t.dispatchLine }))}
             />
           </PrintSheet>
           <PrintSheet title="Vehicle Barcode" triggerLabel="📦 Print Barcode">

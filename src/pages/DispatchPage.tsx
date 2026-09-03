@@ -23,7 +23,6 @@ export function DispatchPage() {
   const dispatchVerifications = useWarehouseStore((s) => s.dispatchVerifications);
   const availableOnBay = useWarehouseStore((s) => s.availableOnBay);
   const scanDispatchLine = useWarehouseStore((s) => s.scanDispatchLine);
-  const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
@@ -33,17 +32,6 @@ export function DispatchPage() {
   // active on the order at once, so the scanned line itself is what picks
   // which vehicle's plate to expect next.
   const [scannedTruckId, setScannedTruckId] = useState<string | null>(null);
-  const [dispatchPickingState, setDispatchPickingState] = useState<{
-    taskId: string | null;
-    step: 'task-select' | 'bay-rack' | 'pallet' | 'scan-line' | 'scan-vehicle';
-    currentPalletIndex: number;
-    bayRackId: string | null;
-  }>({
-    taskId: null,
-    step: 'task-select',
-    currentPalletIndex: 0,
-    bayRackId: null,
-  });
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
   const remaining = selectedSO ? selectedSO.lines.reduce((sum, l) => sum + (l.qty - l.dispatchedQty), 0) : 0;
@@ -93,22 +81,6 @@ export function DispatchPage() {
     return t.status;
   }
 
-  const myDispatchPickingTasks = currentUser
-    ? pickTasks.filter(
-        (t) => t.origin === 'Dispatch' && t.assignedPickerId === currentUser.id && t.status === 'Accepted',
-      )
-    : [];
-  const currentDispatchTask = dispatchPickingState.taskId
-    ? myDispatchPickingTasks.find((t) => t.id === dispatchPickingState.taskId)
-    : null;
-  const currentPalletItem = currentDispatchTask?.items[dispatchPickingState.currentPalletIndex] ?? null;
-  // The task itself was tagged with its target vehicle at assignment time
-  // (see assignDispatchPickingTasks) — not re-derived from the order, since
-  // more than one vehicle can be active on it at once.
-  const currentTaskTruck = currentDispatchTask?.truckId
-    ? trucks.find((t) => t.id === currentDispatchTask.truckId)
-    : undefined;
-
   // Pallets ready to load straight onto a truck, bypassing the bay — either
   // an approved Storage shortfall released via a Bay-Topup pick task, or a
   // Loaded pallet diverted straight from Production. Both land on the same
@@ -122,98 +94,6 @@ export function DispatchPage() {
           selectedSO.lines.some((l) => l.sku === loads.find((ld) => ld.palletId === palletId)?.sku),
         )
     : [];
-
-  function handleStartDispatchPicking(taskId: string) {
-    setDispatchPickingState({
-      taskId,
-      step: 'bay-rack',
-      currentPalletIndex: 0,
-      bayRackId: null,
-    });
-  }
-
-  function handleScanBayRack(bayRackId: string) {
-    if (!currentDispatchTask) return;
-    const bayRack = bayRacks.find((b) => b.id === bayRackId);
-    if (!bayRack) {
-      pushToast(`Bay rack ${bayRackId} not found`, 'error');
-      return;
-    }
-    setDispatchPickingState((s) => ({ ...s, bayRackId, step: 'pallet' }));
-  }
-
-  function handleScanPalletAtBay(palletId: string) {
-    if (!currentDispatchTask) return;
-    const currentItem = currentDispatchTask.items[dispatchPickingState.currentPalletIndex];
-    if (palletId !== currentItem.palletId) {
-      pushToast(`Wrong pallet — expected ${currentItem.palletId}, scanned ${palletId}`, 'error');
-      return;
-    }
-
-    if (!currentUser) return;
-    const result = executeDispatchPicking({
-      pickTaskId: currentDispatchTask.id,
-      bayRackId: dispatchPickingState.bayRackId!,
-      palletIds: [currentItem.palletId],
-      operatorId: currentUser.id,
-    });
-    if (!result.ok) {
-      pushToast(result.error, 'error');
-      return;
-    }
-
-    const dispatchLine = currentTaskTruck?.dispatchLine || 'Dispatch Line';
-    pushToast(`${currentItem.palletId} ✓ staged at ${dispatchLine}`, 'success');
-
-    const nextIndex = dispatchPickingState.currentPalletIndex + 1;
-    if (nextIndex < currentDispatchTask.items.length) {
-      setDispatchPickingState((s) => ({ ...s, currentPalletIndex: nextIndex, step: 'bay-rack', bayRackId: null }));
-      pushToast(`Next: ${currentDispatchTask.items[nextIndex].palletId}`, 'info');
-    } else {
-      pushToast(`All ${currentDispatchTask.items.length} pallets staged ✓`, 'success');
-      setDispatchPickingState((s) => ({ ...s, step: 'scan-line' }));
-    }
-  }
-
-  function handleCancelDispatchPicking() {
-    setDispatchPickingState({
-      taskId: null,
-      step: 'task-select',
-      currentPalletIndex: 0,
-      bayRackId: null,
-    });
-  }
-
-  function handleScanDispatchLineForTask(lineCode: string) {
-    if (!currentDispatchTask || !currentTaskTruck) return;
-
-    // Verify it's the correct dispatch line
-    if (lineCode !== currentTaskTruck.dispatchLine) {
-      pushToast(`Wrong line — expected ${currentTaskTruck.dispatchLine}, scanned ${lineCode}`, 'error');
-      return;
-    }
-
-    pushToast(`✓ Dispatch line confirmed — now scan vehicle`, 'success');
-    setDispatchPickingState((s) => ({ ...s, step: 'scan-vehicle' }));
-  }
-
-  function handleScanVehicleForTask(vehicleId: string) {
-    if (!currentDispatchTask || !currentTaskTruck) return;
-
-    // Verify it's the correct vehicle
-    if (vehicleId !== currentTaskTruck.plate && vehicleId !== currentTaskTruck.id) {
-      pushToast(`Wrong vehicle — expected ${currentTaskTruck.plate}, scanned ${vehicleId}`, 'error');
-      return;
-    }
-
-    pushToast(`✓ Task completed: all pallets staged at ${currentTaskTruck.dispatchLine} for ${currentTaskTruck.plate}`, 'success');
-    setDispatchPickingState({
-      taskId: null,
-      step: 'task-select',
-      currentPalletIndex: 0,
-      bayRackId: null,
-    });
-  }
 
   function handleScanLine(lineCode: string) {
     if (!selectedSO || !currentUser) return;
@@ -276,123 +156,6 @@ export function DispatchPage() {
           generate the handover printout — the pallet stays behind, only the product moves on.
         </p>
       </div>
-
-      {myDispatchPickingTasks.length > 0 && can(currentUser?.role, 'execute:pickTask') && (
-        <div className="space-y-4 rounded-2xl border border-violet-800 bg-violet-950/20 p-6">
-          <h2 className="font-semibold text-violet-200">My Dispatch Tasks</h2>
-          <p className="text-xs text-violet-300">Scan to move pallets from bay to dispatch line, then verify with vehicle</p>
-
-          {dispatchPickingState.taskId === null ? (
-            <div className="space-y-2">
-              {myDispatchPickingTasks.map((task) => {
-                const palletCount = task.items.length;
-                const progress = task.items.filter((i) => i.picked).length;
-                return (
-                  <button
-                    key={task.id}
-                    onClick={() => handleStartDispatchPicking(task.id)}
-                    className="w-full rounded-lg border border-slate-800 bg-slate-800/60 px-4 py-3 text-left text-sm hover:bg-slate-800"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-medium text-slate-200">{task.id}</div>
-                        <div className="text-xs text-slate-500">{palletCount} pallets to move</div>
-                      </div>
-                      <div className={`text-sm font-semibold ${progress === palletCount ? 'text-emerald-400' : 'text-slate-300'}`}>
-                        {progress}/{palletCount}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-indigo-800 bg-indigo-950/40 px-3 py-2">
-                <p className="text-sm font-semibold text-indigo-300">{currentDispatchTask?.id}</p>
-                <p className="text-xs text-indigo-200">
-                  {dispatchPickingState.currentPalletIndex + 1} of {currentDispatchTask?.items.length}: {currentPalletItem?.palletId}
-                </p>
-              </div>
-
-              {dispatchPickingState.step === 'bay-rack' && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">1. Scan bay rack</span>
-                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">2. Scan pallet</span>
-                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan dispatch line</span>
-                  </div>
-                  <p className="text-sm text-slate-300">Scan the bay rack holding {currentPalletItem?.palletId}</p>
-                  <ScanInput
-                    label="Scan source bay rack"
-                    placeholder="e.g. BAY-A"
-                    onScan={handleScanBayRack}
-                    suggestions={bayRacks.map((b) => b.id)}
-                  />
-                </div>
-              )}
-
-              {dispatchPickingState.step === 'pallet' && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Scan bay rack ✓</span>
-                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">2. Scan pallet</span>
-                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan dispatch line</span>
-                  </div>
-                  <p className="text-sm text-slate-300">Scan pallet {currentPalletItem?.palletId} to confirm it's the right one</p>
-                  <ScanInput
-                    label="Scan pallet barcode"
-                    placeholder="e.g. PLT-001"
-                    onScan={handleScanPalletAtBay}
-                    suggestions={[currentPalletItem?.palletId || '']}
-                  />
-                </div>
-              )}
-
-              {dispatchPickingState.step === 'scan-line' && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Move pallets ✓</span>
-                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">2. Scan dispatch line</span>
-                    <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan vehicle</span>
-                  </div>
-                  <p className="text-sm text-violet-200">Scan dispatch line {currentTaskTruck?.dispatchLine}</p>
-                  <ScanInput
-                    label="Scan dispatch line barcode"
-                    placeholder={`e.g. ${currentTaskTruck?.dispatchLine}`}
-                    onScan={handleScanDispatchLineForTask}
-                    suggestions={currentTaskTruck?.dispatchLine ? [currentTaskTruck.dispatchLine] : []}
-                  />
-                </div>
-              )}
-
-              {dispatchPickingState.step === 'scan-vehicle' && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">1. Move pallets ✓</span>
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">2. Scan dispatch line ✓</span>
-                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">3. Scan vehicle</span>
-                  </div>
-                  <p className="text-sm text-violet-200">Scan vehicle {currentTaskTruck?.plate} to confirm</p>
-                  <ScanInput
-                    label="Scan vehicle barcode or plate"
-                    placeholder={`e.g. ${currentTaskTruck?.plate}`}
-                    onScan={handleScanVehicleForTask}
-                    suggestions={currentTaskTruck ? [currentTaskTruck.plate, currentTaskTruck.id] : []}
-                  />
-                </div>
-              )}
-
-              <button
-                onClick={handleCancelDispatchPicking}
-                className="w-full rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-400 hover:bg-slate-800"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-6">
