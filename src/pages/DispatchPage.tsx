@@ -43,12 +43,45 @@ export function DispatchPage() {
   const activeTrucks = selectedSO ? trucks.filter((t) => selectedSO.assignedTruckIds.includes(t.id)) : [];
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
+
+  const productionApprovals = selectedSO
+    ? directDispatchApprovals.filter(
+        (a) => a.salesOrderId === selectedSO.id && a.source === 'Production' && a.status === 'Approved',
+      )
+    : [];
+
   // Scoped to one truck's own tasks — with more than one vehicle active on
   // the order, a picker whose task is for LINE 002 shouldn't have to wait on
   // a different picker's task for LINE 001 before they can stage/scan.
+  // Also requires any production-direct approval for a sku this truck's own
+  // manifest covers to be fully captured — without this, a picker could
+  // scan (and close out the truck, freeing its dispatch line) the moment
+  // the bay portion alone is done, before a still-in-transit or just-arrived
+  // direct-dispatch pallet is folded into that same manifest, permanently
+  // missing it once the truck departs.
   function pickingCompleteForTruck(truckId: string) {
     const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
-    return tasksForTruck.length > 0 && tasksForTruck.every((t) => t.status === 'Completed');
+    if (!tasksForTruck.every((t) => t.status === 'Completed')) return false;
+
+    const verification = selectedSO
+      ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
+      : undefined;
+    if (!verification) return false;
+
+    // Checked by the pallet's own status, not membership in THIS truck's
+    // palletIds — an old approval from an earlier, already-departed truck's
+    // batch stays 'Approved' forever once resolved, and its pallets were
+    // rightly captured by that truck's manifest, not this one's. Requiring
+    // them in *this* verification would permanently block every later
+    // truck on the same sku. 'StagedForDispatch' means captured by some
+    // manifest generation already, whichever truck that was for.
+    const skus = new Set(verification.products.map((p) => p.sku));
+    const relevantApprovals = productionApprovals.filter((a) => skus.has(a.sku));
+    return relevantApprovals.every((a) => {
+      if ((a.palletsRemaining ?? 0) > 0) return false;
+      const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
+      return taggedPallets.every((p) => p.status === 'StagedForDispatch');
+    });
   }
   // Whether a specific truck's dispatch line has already been scanned — used
   // per pick task / per production-direct batch below, since each can be
@@ -58,12 +91,6 @@ export function DispatchPage() {
     return !!dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
       ?.dispatchLineScannedAt;
   }
-
-  const productionApprovals = selectedSO
-    ? directDispatchApprovals.filter(
-        (a) => a.salesOrderId === selectedSO.id && a.source === 'Production' && a.status === 'Approved',
-      )
-    : [];
 
   // Three-stage lifecycle for a direct-dispatch pick task: moving (In
   // Progress) → arrived at the loading bay (Staged) → dispatch line scanned
@@ -109,7 +136,10 @@ export function DispatchPage() {
       return;
     }
     if (!pickingCompleteForTruck(truck.id)) {
-      pushToast(`Picking for ${truck.dispatchLine} is not complete yet — every assigned task must reach Completed first.`, 'error');
+      pushToast(
+        `Picking for ${truck.dispatchLine} is not complete yet — every assigned task, and any direct-dispatch pallet still in transit, must be done and captured in the manifest first.`,
+        'error',
+      );
       return;
     }
 
