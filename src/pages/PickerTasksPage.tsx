@@ -4,11 +4,13 @@ import { StatusPill } from '../components/StatusPill';
 import { can } from '../rbac';
 import type { PickTask } from '../types/domain';
 import { STORAGE_ZONES, LOADING_BAY_ZONES } from '../data/seed';
+import { PRODUCTS } from '../data/products';
 
 export function PickerTasksPage() {
   const pickTasks = useWarehouseStore((s) => s.pickTasks);
   const racks = useWarehouseStore((s) => s.racks);
   const currentUser = useWarehouseStore((s) => s.currentUser);
+  const trucks = useWarehouseStore((s) => s.trucks);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const isPicker = can(currentUser?.role, 'execute:pickTask');
@@ -19,6 +21,8 @@ export function PickerTasksPage() {
     const zone = STORAGE_ZONES.find((z) => z.id === rack.zoneId) || LOADING_BAY_ZONES.find((z) => z.id === rack.zoneId);
     return zone;
   };
+
+  const getProductName = (sku: string) => PRODUCTS.find((p) => p.sku === sku)?.name ?? sku;
 
   const myAssignedTasks = pickTasks.filter(
     (t) => t.status === 'Accepted' && t.assignedPickerId === currentUser?.id,
@@ -192,33 +196,35 @@ export function PickerTasksPage() {
               </div>
 
               <div className="space-y-3">
+                {/* What to pick and exactly where it is — the system already
+                    knows the rack/slot for every item (including bay racks
+                    for Dispatch tasks), so show it instead of a generic
+                    "scan bay rack" placeholder. */}
                 <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pallets to move</p>
-                  <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
-                    {selectedTask.items.map((item) => item.palletId).join(', ')}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">From location</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Items to pick</p>
                   <div className="space-y-1">
-                    {selectedTask.origin === 'Dispatch' ? (
-                      <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
-                        Loading Bay — scan bay rack, then pallet
-                      </div>
-                    ) : (
-                      selectedTask.items.map((item) => {
-                        const zone = getZoneFromRackId(item.sourceRackId);
-                        return (
-                          <div key={item.palletId} className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5 flex justify-between items-center">
-                            <span>{item.palletId} at {item.sourceRackId}</span>
-                            {zone && (
-                              <span className="text-slate-500 font-mono text-[10px]">{zone.id}</span>
-                            )}
+                    {selectedTask.items.map((item) => {
+                      const zone = getZoneFromRackId(item.sourceRackId);
+                      return (
+                        <div
+                          key={item.palletId}
+                          className={`text-xs rounded px-2 py-1.5 ${item.picked ? 'bg-emerald-500/10 text-emerald-300' : 'bg-slate-800/40 text-slate-300'}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{getProductName(item.sku)} — {item.quantity.toLocaleString()} units</span>
+                            {item.picked && <span className="text-[10px]">✓ picked</span>}
                           </div>
-                        );
-                      })
-                    )}
+                          <div className="mt-0.5 flex items-center justify-between text-slate-500">
+                            <span className="font-mono">{item.palletId}</span>
+                            <span>
+                              {item.sourceRackId
+                                ? `${item.sourceRackId}${item.sourceSlotIndex >= 0 ? ` / Slot ${item.sourceSlotIndex + 1}` : ''}${zone ? ` (${zone.id})` : ''}`
+                                : 'Location not tracked'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -226,7 +232,16 @@ export function PickerTasksPage() {
                   <div className="space-y-1">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Destination</p>
                     <div className="text-xs text-slate-300 bg-slate-800/40 rounded px-2 py-1.5">
-                      Dispatch line (allocated truck)
+                      {(() => {
+                        // The task carries its own target vehicle, fixed at
+                        // assignment time — more accurate than guessing from
+                        // the order, since more than one vehicle can be
+                        // active on it at once.
+                        const truck = selectedTask.truckId ? trucks.find((t) => t.id === selectedTask.truckId) : undefined;
+                        return truck
+                          ? `${truck.dispatchLine} — vehicle ${truck.plate}`
+                          : 'Dispatch line (allocated truck)';
+                      })()}
                     </div>
                   </div>
                 ) : (

@@ -1,20 +1,32 @@
-import type { DispatchVerification } from '../types/domain';
+import type { DispatchVerification, SalesOrderRelease } from '../types/domain';
 import { unitsPerPallet } from '../data/products';
 
 interface DispatchManifestProps {
   verification: DispatchVerification;
   loaderName: string;
+  // The registered vehicle's plate/driver (from Truck) — verification only
+  // stores a truckId, not these, so the caller resolves and passes them.
+  vehiclePlate: string;
+  driverName: string | null;
+  // Distinguishes which slice of the order's release history this printout
+  // covers — e.g. "This release" (default, just the newest batch) vs "Full
+  // order — all releases to date" (the optional all-inclusive reprint).
+  subtitle?: string;
+  // All of this order's release events (any truck), for the all-inclusive
+  // view only — lets it show each product's total broken down by the actual
+  // batches it was released in, rather than one combined number that hides
+  // that the order went out in stages.
+  releases?: SalesOrderRelease[];
 }
 
-export function DispatchManifest({ verification, loaderName }: DispatchManifestProps) {
-  const palletCount = verification.palletIds.length;
-
+export function DispatchManifest({ verification, loaderName, vehiclePlate, driverName, subtitle, releases }: DispatchManifestProps) {
   return (
     <div className="space-y-6 bg-white p-12 text-black">
       {/* Header */}
       <div className="border-b-2 border-black pb-4">
         <h1 className="text-2xl font-bold">DISPATCH MANIFEST</h1>
         <p className="text-sm text-gray-600">Goods Handover & Verification Record</p>
+        {subtitle && <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{subtitle}</p>}
       </div>
 
       {/* Order & Vehicle Details */}
@@ -28,8 +40,12 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
           <p className="text-lg">{verification.customer}</p>
         </div>
         <div>
-          <p className="font-semibold">Vehicle Registration</p>
-          <p className="text-lg font-mono">{verification.truckId}</p>
+          <p className="font-semibold">Vehicle Number Plate</p>
+          <p className="text-lg font-mono">{vehiclePlate}</p>
+        </div>
+        <div>
+          <p className="font-semibold">Driver</p>
+          <p className="text-lg">{driverName || 'Not recorded'}</p>
         </div>
         <div>
           <p className="font-semibold">Dispatch Line</p>
@@ -37,63 +53,65 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
         </div>
       </div>
 
-      {/* Products with Pallet Count */}
-      <div>
-        <h2 className="font-semibold mb-3 border-b border-black pb-2">Products Being Dispatched</h2>
-        <div className="space-y-3">
-          {verification.products.map((product) => {
-            const pallets = Math.ceil(product.releasedQty / unitsPerPallet(product.sku));
-            return (
-              <div key={product.sku} className="grid grid-cols-3 gap-4 text-sm py-2 border-b border-gray-300">
-                <div>
-                  <p className="font-medium">{product.productName}</p>
-                  <p className="text-xs text-gray-600">{product.sku}</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-medium">{pallets} pallets</p>
-                  <p className="text-xs text-gray-600">{product.releasedQty} units</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs">Ordered: {product.orderedQty}</p>
-                  <p className="text-xs">Released: {product.releasedQty}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Release Items Checklist */}
+      {/* Released Items Checklist — kept deliberately simple: just what was
+          ordered and what's been released, no pallet/staging bookkeeping.
+          Each product gets its own bordered card with Ordered/Released as
+          clearly separated, labeled stat blocks rather than run-on text. */}
       <div>
         <h2 className="font-semibold mb-3 border-b border-black pb-2">Released Items Checklist</h2>
-        <div className="space-y-2">
+        <div className="grid grid-cols-2 gap-3">
           {verification.products.map((product) => {
+            // Computed only — a display convenience, not a pallet-ID/staging
+            // tracker (that complexity was deliberately dropped).
             const pallets = Math.ceil(product.releasedQty / unitsPerPallet(product.sku));
+            const skuReleases = releases
+              ?.filter((r) => r.sku === product.sku)
+              .sort((a, b) => a.releasedAt.localeCompare(b.releasedAt));
             return (
-              <div key={product.sku} className="flex items-start gap-3 text-sm py-1">
-                <input
-                  type="checkbox"
-                  className="mt-1 w-4 h-4 cursor-pointer"
-                  style={{ accentColor: '#000' }}
-                />
-                <div className="flex-1">
-                  <p className="font-medium">{product.productName}</p>
-                  <p className="text-xs text-gray-600">
-                    Ordered {product.orderedQty} — {product.releasedQty} units ({pallets} pallets) released
-                  </p>
+              <div key={product.sku} className="rounded border border-gray-400 overflow-hidden">
+                <div className="flex items-center gap-2 border-b border-gray-400 bg-gray-100 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 cursor-pointer shrink-0"
+                    style={{ accentColor: '#000' }}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold truncate">{product.productName}</p>
+                    <p className="text-[10px] text-gray-500">{product.sku}</p>
+                  </div>
                 </div>
+                <div className="grid grid-cols-2 divide-x divide-gray-300 text-center">
+                  <div className="px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Ordered</p>
+                    <p className="text-lg font-semibold">{product.orderedQty.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-gray-50 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Released</p>
+                    <p className="text-lg font-bold">{product.releasedQty.toLocaleString()}</p>
+                    {product.releasedQty > 0 && (
+                      <p className="text-[10px] text-gray-500">{pallets} pallet{pallets === 1 ? '' : 's'}</p>
+                    )}
+                  </div>
+                </div>
+                {skuReleases && skuReleases.length > 1 && (
+                  <div className="border-t border-gray-300 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Released in {skuReleases.length} batches
+                    </p>
+                    <div className="space-y-0.5">
+                      {skuReleases.map((r, i) => (
+                        <div key={r.id} className="flex justify-between text-[11px] text-gray-700">
+                          <span>Batch {i + 1} — {new Date(r.releasedAt).toLocaleDateString()}</span>
+                          <span className="font-medium">{r.qty.toLocaleString()} units</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
-      </div>
-
-      {/* Pallet Summary */}
-      <div className="bg-gray-100 p-4 rounded">
-        <p className="text-sm">
-          <strong>Total Pallets:</strong> {palletCount} pallets
-        </p>
-        <p className="text-xs text-gray-600 mt-1">Pallet IDs: {verification.palletIds.join(', ')}</p>
       </div>
 
       {/* Handover Verification Section */}
@@ -115,10 +133,6 @@ export function DispatchManifest({ verification, loaderName }: DispatchManifestP
             <label className="flex items-center gap-2 text-xs">
               <input type="checkbox" style={{ accentColor: '#000' }} />
               Goods condition acceptable ✓
-            </label>
-            <label className="flex items-center gap-2 text-xs">
-              <input type="checkbox" style={{ accentColor: '#000' }} />
-              Pallet IDs match manifest ✓
             </label>
           </div>
         </div>

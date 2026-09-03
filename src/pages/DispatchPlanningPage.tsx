@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useWarehouseStore } from '../store/useWarehouseStore';
+import { useWarehouseStore, activeTruckIds } from '../store/useWarehouseStore';
 import { PrintSheet } from '../components/PrintSheet';
 import { DispatchManifest } from '../components/DispatchManifest';
 import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
@@ -51,9 +51,25 @@ export function DispatchPlanningPage() {
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
   const [plateConfirmed, setPlateConfirmed] = useState(false);
+  // Which of the order's (possibly several) active vehicles the Loader is
+  // currently working with — release/assign/generate all target this one.
+  // Explicit selection is only meaningful while it's still active; otherwise
+  // fall back to the most-recently-registered active truck below, so a
+  // single-vehicle order needs zero clicks and "maintain the vehicle I was
+  // using" is the default for a second release on the same truck.
+  const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
 
   const selectedSO = salesOrders.find((s) => s.id === selectedSOId) ?? null;
-  const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
+  const activeTrucksForSelectedSO = selectedSO
+    ? trucks.filter((t) => selectedSO.assignedTruckIds.includes(t.id))
+    : [];
+  const effectiveTruckId =
+    selectedTruckId && activeTrucksForSelectedSO.some((t) => t.id === selectedTruckId)
+      ? selectedTruckId
+      : (activeTrucksForSelectedSO.at(-1)?.id ?? null);
+  const soVerification = selectedSO
+    ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === effectiveTruckId)
+    : undefined;
 
   const ordersByBucket: Record<OrderTab, SalesOrder[]> = {
     new: salesOrders.filter((s) => orderBucket(s) === 'new'),
@@ -80,7 +96,13 @@ export function DispatchPlanningPage() {
     return !hasOngoingTask;
   });
 
-  const occupiedDispatchLines = new Set(trucks.map((t) => t.dispatchLine));
+  // Only trucks some sales order currently lists as active occupy a line — a
+  // departed truck (its id removed from every order's assignedTruckIds by
+  // scanDispatchLine) frees its line for the next vehicle.
+  const activeIds = activeTruckIds(salesOrders);
+  const occupiedDispatchLines = new Set(
+    trucks.filter((t) => activeIds.has(t.id)).map((t) => t.dispatchLine),
+  );
   const unoccupiedDispatchLines = ['LINE 001', 'LINE 002', 'LINE 003'].filter(
     (line) => !occupiedDispatchLines.has(line)
   );
@@ -111,12 +133,16 @@ export function DispatchPlanningPage() {
     pushToast('Vehicle registered', 'success');
     setPlate('');
     setDriverName('');
+    // The vehicle the Loader just registered becomes the one they're
+    // "currently working with" by default.
+    setSelectedTruckId(result.data.truck.id);
   }
 
-  function handleGenerateManifest(soId: string) {
+  function handleGenerateManifest(soId: string, truckId: string) {
     if (!currentUser) return;
     const result = generateManifestForPickingComplete({
       salesOrderId: soId,
+      truckId,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
@@ -144,6 +170,7 @@ export function DispatchPlanningPage() {
             onClick={() => {
               setActiveTab(tab.key);
               setSelectedSOId(null);
+              setSelectedTruckId(null);
             }}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.key
@@ -175,7 +202,10 @@ export function DispatchPlanningPage() {
                   return (
                     <button
                       key={so.id}
-                      onClick={() => setSelectedSOId(so.id)}
+                      onClick={() => {
+                        setSelectedSOId(so.id);
+                        setSelectedTruckId(null);
+                      }}
                       className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                         selectedSOId === so.id
                           ? 'border-indigo-500 bg-indigo-950/40'
@@ -224,6 +254,9 @@ export function DispatchPlanningPage() {
               availableOnBay={availableOnBay}
               availableInStorage={availableInStorage}
               handleGenerateManifest={handleGenerateManifest}
+              activeTrucks={activeTrucksForSelectedSO}
+              selectedTruckId={effectiveTruckId}
+              setSelectedTruckId={setSelectedTruckId}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -257,11 +290,13 @@ function DispatchOrderPanel({
   availableInStorage,
   handleGenerateManifest,
   directDispatchApprovals,
+  activeTrucks,
+  selectedTruckId,
+  setSelectedTruckId,
 }: any) {
-  const trucks = useWarehouseStore((s) => s.trucks);
   const pallets = useWarehouseStore((s) => s.pallets);
-  const assignedTruck = order.assignedTruckId ? trucks.find((t: any) => t.id === order.assignedTruckId) : undefined;
-  const bucket = orderBucket(order);
+  const salesOrderReleases = useWarehouseStore((s) => s.salesOrderReleases);
+  const selectedTruck = activeTrucks.find((t: any) => t.id === selectedTruckId);
   const totals = orderTotals(order);
 
   const productionApprovals = directDispatchApprovals.filter(
@@ -316,8 +351,43 @@ function DispatchOrderPanel({
         </div>
       </div>
 
-      {/* STEP 1: Allocate Dispatch Line (for new & pending orders) */}
-      {(bucket === 'new' || bucket === 'pending') && remainingToAllocate > 0 && !assignedTruck && (
+      {/* Active vehicles — more than one can be active on this order at
+          once (each on its own dispatch line). The selector picks which one
+          Steps 3-5 (release/assign/generate) currently target; it only
+          needs to appear once there's an actual choice to make. */}
+      {activeTrucks.length > 0 && (
+        <div className="space-y-2 border-t border-slate-800 pt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Active Vehicle{activeTrucks.length > 1 ? 's' : ''}
+          </p>
+          {activeTrucks.length === 1 ? (
+            <p className="text-sm text-slate-200">
+              {activeTrucks[0].plate} — {activeTrucks[0].dispatchLine}
+            </p>
+          ) : (
+            <select
+              value={selectedTruckId ?? ''}
+              onChange={(e) => setSelectedTruckId(e.target.value)}
+              className="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white"
+            >
+              {activeTrucks.map((t: any) => (
+                <option key={t.id} value={t.id}>{t.plate} — {t.dispatchLine}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {/* STEP 1: Allocate Dispatch Line. Gated on remainingToAllocate alone,
+          not on bucket or on whether a vehicle is already active — another
+          truck being active shouldn't block registering one more (the order
+          can have several at once), and once everything's been released but
+          a second vehicle is still needed to actually dispatch the rest
+          (releasedQty reaches qty before dispatchedQty does), the bucket
+          becomes 'inProgress', not 'pending', so a bucket check here would
+          permanently hide this step with no way to register the next
+          vehicle for what's still undispatched. */}
+      {remainingToAllocate > 0 && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 1: Allocate Dispatch Line</p>
           <div className="space-y-2">
@@ -356,8 +426,13 @@ function DispatchOrderPanel({
         </div>
       )}
 
-      {/* STEP 2: Register Vehicle (moved here - after dispatch line, before release) */}
-      {dispatchLine && !assignedTruck && soPickTasks.length === 0 && totals.releasedQty === 0 && (
+      {/* STEP 2: Register Vehicle (moved here - after dispatch line, before
+          release). Not gated on "no other vehicle active" or "no release/
+          pick history yet" — another vehicle can be registered at the same
+          time as one already active (the order can have several at once),
+          or after an earlier one has departed, with plenty of release/pick
+          history already behind it either way. */}
+      {dispatchLine && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 2: Register Vehicle</p>
           <div className="space-y-2">
@@ -394,12 +469,20 @@ function DispatchOrderPanel({
         </div>
       )}
 
-      {/* STEP 3 & 4: Release Quantity + Assign Pickers — per product line */}
-      {(dispatchLine || assignedTruck?.dispatchLine) && assignedTruck && anyLineHasRemaining && (
+      {/* STEP 3 & 4: Release Quantity + Assign Pickers — per product line.
+          Gated on there being *any* active truck, not a specific one — the
+          truck a bay/storage picker assignment routes to is whichever one
+          is selected above. */}
+      {activeTrucks.length > 0 && anyLineHasRemaining && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">
             Steps 3 &amp; 4: Release &amp; Assign Pickers — per product
           </p>
+          {selectedTruck && (
+            <p className="text-xs text-slate-500">
+              Assigning for <span className="text-slate-300 font-medium">{selectedTruck.plate} ({selectedTruck.dispatchLine})</span>
+            </p>
+          )}
           <div className="space-y-3">
             {order.lines.map((line: SalesOrderLine) => (
               <LineReleasePanel
@@ -411,6 +494,7 @@ function DispatchOrderPanel({
                 availableOnBay={availableOnBay}
                 availableInStorage={availableInStorage}
                 directDispatchApprovals={directDispatchApprovals}
+                truckId={selectedTruckId}
               />
             ))}
           </div>
@@ -461,18 +545,18 @@ function DispatchOrderPanel({
           released more" — more pallets can become ready (arrive at the bay,
           finish a pick) without a new release, and the Loader should be able
           to pull those into the manifest just as freely. */}
-      {assignedTruck && totals.releasedQty > 0 && (!verification || verification.status === 'AwaitingVerification') && (
+      {selectedTruck && totals.releasedQty > 0 && (!verification || verification.status === 'AwaitingVerification') && (
         <div className="space-y-3 border-t border-slate-800 pt-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Step 5: Generate Dispatch Documents</p>
           <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3">
             <p className="text-sm text-emerald-300">
               {verification
-                ? '✓ Regenerate to pull in anything released or readied since these documents were generated.'
-                : '✓ Products released! Generate dispatch documents to print barcode and manifest.'}
+                ? `✓ Regenerate to pull in anything released or readied for ${selectedTruck.plate} since these documents were generated.`
+                : `✓ Products released! Generate dispatch documents for ${selectedTruck.plate} (${selectedTruck.dispatchLine}) to print barcode and manifest.`}
             </p>
           </div>
           <button
-            onClick={() => handleGenerateManifest(order.id)}
+            onClick={() => handleGenerateManifest(order.id, selectedTruck.id)}
             className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
             {verification ? 'Regenerate Documents' : 'Generate Documents'}
@@ -486,14 +570,32 @@ function DispatchOrderPanel({
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">✓ Dispatch Documents</p>
           <PrintSheet title="Dispatch Manifest & Handover" triggerLabel="📋 Print Manifest">
             <DispatchManifest
+              verification={{ ...verification, products: verification.latestReleaseProducts }}
+              loaderName={currentUser?.name || 'Unknown'}
+              vehiclePlate={selectedTruck?.plate || 'Unknown'}
+              driverName={selectedTruck?.driverName ?? null}
+              subtitle="This release"
+            />
+          </PrintSheet>
+          {/* Optional: everything released for this order so far, not just the
+              latest batch — for anyone who wants the full picture at a glance.
+              Also breaks each product down by individual release batch, so
+              it's clear the order was released in stages rather than all at
+              once. */}
+          <PrintSheet title="Full Dispatch Manifest" triggerLabel="📋 Print All-Inclusive Manifest">
+            <DispatchManifest
               verification={verification}
               loaderName={currentUser?.name || 'Unknown'}
+              vehiclePlate={selectedTruck?.plate || 'Unknown'}
+              driverName={selectedTruck?.driverName ?? null}
+              subtitle="Full order — all releases to date"
+              releases={salesOrderReleases.filter((r: any) => r.salesOrderId === order.id)}
             />
           </PrintSheet>
           <PrintSheet title="Vehicle Barcode" triggerLabel="📦 Print Barcode">
             <VehicleBarcodePage
               vehicleBarcode={verification.vehicleBarcode}
-              vehiclePlate={assignedTruck?.plate || 'Unknown'}
+              vehiclePlate={selectedTruck?.plate || 'Unknown'}
               salesOrderId={verification.salesOrderId}
               customerName={verification.customer}
               dispatchLine={verification.dispatchLine}
@@ -513,6 +615,7 @@ function LineReleasePanel({
   availableOnBay,
   availableInStorage,
   directDispatchApprovals,
+  truckId,
 }: any) {
   const currentUser = useWarehouseStore((s) => s.currentUser);
   const releaseSalesOrderQuantity = useWarehouseStore((s) => s.releaseSalesOrderQuantity);
@@ -601,6 +704,11 @@ function LineReleasePanel({
       return false;
     }
 
+    if (allAssignments.length > 0 && !truckId) {
+      pushToast('Select which vehicle this is for first', 'error');
+      return false;
+    }
+
     // Check for duplicate pickers
     const pickerIds = allAssignments.map((a) => a.pickerId);
     const duplicates = pickerIds.filter((id, idx) => pickerIds.indexOf(id) !== idx);
@@ -630,6 +738,7 @@ function LineReleasePanel({
       const storageResult = assignStorageDirectDispatchTasks({
         salesOrderId: order.id,
         lineId: line.id,
+        truckId,
         assignments: storageAssignments,
         operatorId: currentUser.id,
       });
@@ -644,6 +753,7 @@ function LineReleasePanel({
       const bayResult = assignDispatchPickingTasks({
         salesOrderId: order.id,
         lineId: line.id,
+        truckId,
         assignments: bayAssignments,
         operatorId: currentUser.id,
       });
@@ -911,58 +1021,67 @@ function LineReleasePanel({
             </div>
           )}
 
-          {/* Loading Bay Pickers Section */}
-          <label className="block text-xs font-medium text-slate-300">
-            Assign Pickers — {Math.min(availableOnBay(line.sku), Number(releaseQty)).toLocaleString()} units available on the bay
-          </label>
-          {pickerRows.map((row, i) => (
-            <div key={i} className="flex gap-2">
-              <select
-                value={row.pickerId}
-                onChange={(e) => {
-                  const newRows = [...pickerRows];
-                  newRows[i].pickerId = e.target.value;
-                  setPickerRows(newRows);
-                }}
-                className="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
+          {/* Loading Bay Pickers Section — only shown when the bay actually
+              has something to assign. With 0 units on the bay there's
+              nothing for a bay picker to move, so presenting this section
+              anyway just leads to a dead end: picking a name forces a
+              quantity, and the only valid quantity (0) is rejected by the
+              bay-availability check below. */}
+          {availableOnBay(line.sku) > 0 && (
+            <>
+              <label className="block text-xs font-medium text-slate-300">
+                Assign Pickers — {Math.min(availableOnBay(line.sku), Number(releaseQty)).toLocaleString()} units available on the bay
+              </label>
+              {pickerRows.map((row, i) => (
+                <div key={i} className="flex gap-2">
+                  <select
+                    value={row.pickerId}
+                    onChange={(e) => {
+                      const newRows = [...pickerRows];
+                      newRows[i].pickerId = e.target.value;
+                      setPickerRows(newRows);
+                    }}
+                    className="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
+                  >
+                    <option value="">Select picker...</option>
+                    {availablePickers.filter((p: any) => getPickerType(p.id) !== 'storage').map((p: any) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={row.qty}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9]/g, '');
+                      if (val === '' || Number(val) <= Number(releaseQty)) {
+                        const newRows = [...pickerRows];
+                        newRows[i].qty = val;
+                        setPickerRows(newRows);
+                      }
+                    }}
+                    placeholder="Qty"
+                    className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white [&::-webkit-outer-spin-button]:hidden [&::-webkit-inner-spin-button]:hidden"
+                  />
+                  {pickerRows.length > 1 && (
+                    <button
+                      onClick={() => handleRemovePickerRow(i)}
+                      className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                onClick={handleAddPickerRow}
+                className="w-full rounded border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
               >
-                <option value="">Select picker...</option>
-                {availablePickers.filter((p: any) => getPickerType(p.id) !== 'storage').map((p: any) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={row.qty}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/[^0-9]/g, '');
-                  if (val === '' || Number(val) <= Number(releaseQty)) {
-                    const newRows = [...pickerRows];
-                    newRows[i].qty = val;
-                    setPickerRows(newRows);
-                  }
-                }}
-                placeholder="Qty"
-                className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white [&::-webkit-outer-spin-button]:hidden [&::-webkit-inner-spin-button]:hidden"
-              />
-              {pickerRows.length > 1 && (
-                <button
-                  onClick={() => handleRemovePickerRow(i)}
-                  className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-          ))}
-          <button
-            onClick={handleAddPickerRow}
-            className="w-full rounded border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
-          >
-            + Add Picker
-          </button>
+                + Add Picker
+              </button>
+            </>
+          )}
 
           {/* Release Button - Assigns tasks & pickers get notified */}
           <button

@@ -274,7 +274,11 @@ export interface SalesOrder {
   // order-level status reads don't need to recompute it themselves.
   status: 'Pending' | 'Picking' | 'Fulfilled';
   createdAt: string;
-  assignedTruckId: string | null;
+  // Vehicles currently active on this order — more than one can be active
+  // at once (e.g. two trucks on two dispatch lines, each collecting a
+  // different released batch). A truck's id is removed once its dispatch
+  // completes (see scanDispatchLine), freeing its dispatch line.
+  assignedTruckIds: string[];
 }
 
 export function computeSalesOrderStatus(lines: SalesOrderLine[]): SalesOrder['status'] {
@@ -293,6 +297,13 @@ export interface SalesOrderRelease {
   qty: number;
   releasedByUserId: string;
   releasedAt: string;
+  // Claimed by whichever dispatch document generation first reports it as
+  // "newly released" (see generateManifestForPickingComplete) — regardless
+  // of source (bay/storage/production-direct) or which truck ends up
+  // handling it. Stays claimed forever after, so a release never resurfaces
+  // as "new" again on a later regenerate or a second truck for the same
+  // order — only an actual new release event should ever do that.
+  includedInDocument: boolean;
 }
 
 export interface Manifest {
@@ -335,6 +346,13 @@ export interface PickTask {
   assignedPickerId: string | null;
   directDispatch: boolean;  // true for storage/production direct dispatch (skip staging, route to dispatch line)
   createdAt: string;
+  // Which active vehicle this task's pallets are physically routed to, for
+  // origins that stage at a dispatch line ('Dispatch' and 'Storage'+
+  // directDispatch) — set at assignment time so execution can route
+  // correctly even when more than one vehicle is active on the order at
+  // once. Null for origins that don't route to a specific truck yet
+  // (Production put-away, Bay-Topup).
+  truckId: string | null;
 }
 
 export interface HoldRecord {
@@ -451,6 +469,14 @@ export interface CustomerReturn {
 // and Driver physically check the goods and both sign (Verified). The WMS's
 // workflow ends here — not "loaded," which happens outside this system.
 // There is no Stock HOD step in this flow.
+export interface DispatchVerificationProduct {
+  sku: string;
+  productName: string;
+  orderedQty: number;
+  releasedQty: number;
+  pickedQty: number;
+}
+
 export interface DispatchVerification {
   id: string;
   salesOrderId: string;
@@ -458,8 +484,18 @@ export interface DispatchVerification {
   vehicleBarcode: string;
   dispatchLine: string;
   customer: string;
-  products: { sku: string; productName: string; orderedQty: number; releasedQty: number; pickedQty: number }[];
+  // Cumulative across every generation — the source of truth for dispatchedQty
+  // math at scan time (see scanDispatchLine). Never trimmed down.
+  products: DispatchVerificationProduct[];
+  // Kept for the underlying fulfillment math (see scanDispatchLine) and to
+  // decide which pallets get promoted to StagedForDispatch — not shown on
+  // the printed manifest, which deliberately stays to just Ordered/Released.
   palletIds: string[];
+  // What's newly released as of the *most recent* generation — driven by
+  // actual SalesOrderRelease events (see generateManifestForPickingComplete),
+  // not by pallet movement. Lets the default printed manifest show just the
+  // latest release batch instead of everything ever released for the order.
+  latestReleaseProducts: DispatchVerificationProduct[];
   loaderUserId: string | null;
   pickerUserIds: string[];
   stagedAt: string;

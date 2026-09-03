@@ -29,6 +29,10 @@ export function DispatchPage() {
 
   const [selectedSOId, setSelectedSOId] = useState<string | null>(null);
   const [dispatchLineScanned, setDispatchLineScanned] = useState(false);
+  // Which active truck the dispatch-line scan matched — more than one can be
+  // active on the order at once, so the scanned line itself is what picks
+  // which vehicle's plate to expect next.
+  const [scannedTruckId, setScannedTruckId] = useState<string | null>(null);
   const [dispatchPickingState, setDispatchPickingState] = useState<{
     taskId: string | null;
     step: 'task-select' | 'bay-rack' | 'pallet' | 'scan-line' | 'scan-vehicle';
@@ -46,12 +50,26 @@ export function DispatchPage() {
   const availableByLine = selectedSO
     ? selectedSO.lines.map((l) => ({ sku: l.sku, productName: l.productName, available: availableOnBay(l.sku) }))
     : [];
-  const assignedTruck = selectedSO ? trucks.find((t) => t.id === selectedSO.assignedTruckId) : undefined;
+  // More than one vehicle can be active on the order at once, each on its
+  // own dispatch line.
+  const activeTrucks = selectedSO ? trucks.filter((t) => selectedSO.assignedTruckIds.includes(t.id)) : [];
 
   const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
-  const pickingComplete = soPickTasks.length > 0 && soPickTasks.every((t) => t.status === 'Completed');
-  const soVerification = selectedSO ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id) : undefined;
-  const dispatchLineActuallyScanned = !!soVerification?.dispatchLineScannedAt;
+  // Scoped to one truck's own tasks — with more than one vehicle active on
+  // the order, a picker whose task is for LINE 002 shouldn't have to wait on
+  // a different picker's task for LINE 001 before they can stage/scan.
+  function pickingCompleteForTruck(truckId: string) {
+    const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
+    return tasksForTruck.length > 0 && tasksForTruck.every((t) => t.status === 'Completed');
+  }
+  // Whether a specific truck's dispatch line has already been scanned — used
+  // per pick task / per production-direct batch below, since each can be
+  // routed to a different one of the order's active trucks.
+  function isLineScannedForTruck(truckId: string | null) {
+    if (!truckId || !selectedSO) return false;
+    return !!dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
+      ?.dispatchLineScannedAt;
+  }
 
   const productionApprovals = selectedSO
     ? directDispatchApprovals.filter(
@@ -64,13 +82,14 @@ export function DispatchPage() {
   // (Completed). A task's own 'Completed' status only means "left storage" —
   // it isn't staged until the pallet is physically confirmed at the bay.
   function pickTaskDisplayStatus(t: (typeof pickTasks)[number]) {
+    const lineScanned = isLineScannedForTruck(t.truckId);
     if (t.origin === 'Storage' && t.directDispatch) {
       if (t.status !== 'Completed') return t.status;
       const allArrived = t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.directDispatchArrivedAt);
       if (!allArrived) return 'In Progress';
-      return dispatchLineActuallyScanned ? 'Completed' : 'Staged';
+      return lineScanned ? 'Completed' : 'Staged';
     }
-    if (t.status === 'Completed') return dispatchLineActuallyScanned ? 'Completed' : 'Staged';
+    if (t.status === 'Completed') return lineScanned ? 'Completed' : 'Staged';
     return t.status;
   }
 
@@ -83,6 +102,12 @@ export function DispatchPage() {
     ? myDispatchPickingTasks.find((t) => t.id === dispatchPickingState.taskId)
     : null;
   const currentPalletItem = currentDispatchTask?.items[dispatchPickingState.currentPalletIndex] ?? null;
+  // The task itself was tagged with its target vehicle at assignment time
+  // (see assignDispatchPickingTasks) — not re-derived from the order, since
+  // more than one vehicle can be active on it at once.
+  const currentTaskTruck = currentDispatchTask?.truckId
+    ? trucks.find((t) => t.id === currentDispatchTask.truckId)
+    : undefined;
 
   // Pallets ready to load straight onto a truck, bypassing the bay — either
   // an approved Storage shortfall released via a Bay-Topup pick task, or a
@@ -137,7 +162,7 @@ export function DispatchPage() {
       return;
     }
 
-    const dispatchLine = assignedTruck?.dispatchLine || 'Dispatch Line';
+    const dispatchLine = currentTaskTruck?.dispatchLine || 'Dispatch Line';
     pushToast(`${currentItem.palletId} ✓ staged at ${dispatchLine}`, 'success');
 
     const nextIndex = dispatchPickingState.currentPalletIndex + 1;
@@ -160,11 +185,11 @@ export function DispatchPage() {
   }
 
   function handleScanDispatchLineForTask(lineCode: string) {
-    if (!currentDispatchTask || !assignedTruck) return;
+    if (!currentDispatchTask || !currentTaskTruck) return;
 
     // Verify it's the correct dispatch line
-    if (lineCode !== assignedTruck.dispatchLine) {
-      pushToast(`Wrong line — expected ${assignedTruck.dispatchLine}, scanned ${lineCode}`, 'error');
+    if (lineCode !== currentTaskTruck.dispatchLine) {
+      pushToast(`Wrong line — expected ${currentTaskTruck.dispatchLine}, scanned ${lineCode}`, 'error');
       return;
     }
 
@@ -173,15 +198,15 @@ export function DispatchPage() {
   }
 
   function handleScanVehicleForTask(vehicleId: string) {
-    if (!currentDispatchTask || !assignedTruck) return;
+    if (!currentDispatchTask || !currentTaskTruck) return;
 
     // Verify it's the correct vehicle
-    if (vehicleId !== assignedTruck.plate && vehicleId !== assignedTruck.id) {
-      pushToast(`Wrong vehicle — expected ${assignedTruck.plate}, scanned ${vehicleId}`, 'error');
+    if (vehicleId !== currentTaskTruck.plate && vehicleId !== currentTaskTruck.id) {
+      pushToast(`Wrong vehicle — expected ${currentTaskTruck.plate}, scanned ${vehicleId}`, 'error');
       return;
     }
 
-    pushToast(`✓ Task completed: all pallets staged at ${assignedTruck.dispatchLine} for ${assignedTruck.plate}`, 'success');
+    pushToast(`✓ Task completed: all pallets staged at ${currentTaskTruck.dispatchLine} for ${currentTaskTruck.plate}`, 'success');
     setDispatchPickingState({
       taskId: null,
       step: 'task-select',
@@ -191,24 +216,36 @@ export function DispatchPage() {
   }
 
   function handleScanLine(lineCode: string) {
-    if (!selectedSO || !currentUser || !assignedTruck) return;
+    if (!selectedSO || !currentUser) return;
 
-    // Verify correct dispatch line
-    if (lineCode !== assignedTruck.dispatchLine) {
-      pushToast(`❌ Wrong line! Expected ${assignedTruck.dispatchLine}, scanned ${lineCode}`, 'error');
+    // More than one vehicle can be active on this order at once — the
+    // scanned line itself is what says which one this is for.
+    const truck = activeTrucks.find((t) => t.dispatchLine === lineCode);
+    if (!truck) {
+      pushToast(
+        `❌ Wrong line! Expected one of: ${activeTrucks.map((t) => t.dispatchLine).join(', ') || 'none active'}, scanned ${lineCode}`,
+        'error',
+      );
+      return;
+    }
+    if (!pickingCompleteForTruck(truck.id)) {
+      pushToast(`Picking for ${truck.dispatchLine} is not complete yet — every assigned task must reach Completed first.`, 'error');
       return;
     }
 
+    setScannedTruckId(truck.id);
     pushToast(`✓ Dispatch line confirmed — now scan vehicle barcode`, 'success');
     setDispatchLineScanned(true);
   }
 
   function handleScanVehicle(vehicleCode: string) {
-    if (!selectedSO || !currentUser || !assignedTruck) return;
+    if (!selectedSO || !currentUser) return;
+    const truck = activeTrucks.find((t) => t.id === scannedTruckId);
+    if (!truck) return;
 
     // Verify correct vehicle
-    if (vehicleCode !== assignedTruck.plate && vehicleCode !== assignedTruck.id) {
-      pushToast(`❌ Wrong vehicle! Expected ${assignedTruck.plate}, scanned ${vehicleCode}`, 'error');
+    if (vehicleCode !== truck.plate && vehicleCode !== truck.id) {
+      pushToast(`❌ Wrong vehicle! Expected ${truck.plate}, scanned ${vehicleCode}`, 'error');
       return;
     }
 
@@ -217,7 +254,7 @@ export function DispatchPage() {
     // and vehicle are confirmed (see its comment in the store).
     const result = scanDispatchLine({
       salesOrderId: selectedSO.id,
-      dispatchLineCode: assignedTruck.dispatchLine,
+      dispatchLineCode: truck.dispatchLine,
       operatorId: currentUser.id,
     });
     if (!result.ok) {
@@ -227,6 +264,7 @@ export function DispatchPage() {
 
     pushToast(`✓ Dispatch verified! Order complete.`, 'success');
     setDispatchLineScanned(false);
+    setScannedTruckId(null);
   }
 
   return (
@@ -318,12 +356,12 @@ export function DispatchPage() {
                     <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">2. Scan dispatch line</span>
                     <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-500">3. Scan vehicle</span>
                   </div>
-                  <p className="text-sm text-violet-200">Scan dispatch line {assignedTruck?.dispatchLine}</p>
+                  <p className="text-sm text-violet-200">Scan dispatch line {currentTaskTruck?.dispatchLine}</p>
                   <ScanInput
                     label="Scan dispatch line barcode"
-                    placeholder={`e.g. ${assignedTruck?.dispatchLine}`}
+                    placeholder={`e.g. ${currentTaskTruck?.dispatchLine}`}
                     onScan={handleScanDispatchLineForTask}
-                    suggestions={assignedTruck?.dispatchLine ? [assignedTruck.dispatchLine] : []}
+                    suggestions={currentTaskTruck?.dispatchLine ? [currentTaskTruck.dispatchLine] : []}
                   />
                 </div>
               )}
@@ -335,12 +373,12 @@ export function DispatchPage() {
                     <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-emerald-300">2. Scan dispatch line ✓</span>
                     <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-indigo-300">3. Scan vehicle</span>
                   </div>
-                  <p className="text-sm text-violet-200">Scan vehicle {assignedTruck?.plate} to confirm</p>
+                  <p className="text-sm text-violet-200">Scan vehicle {currentTaskTruck?.plate} to confirm</p>
                   <ScanInput
                     label="Scan vehicle barcode or plate"
-                    placeholder={`e.g. ${assignedTruck?.plate}`}
+                    placeholder={`e.g. ${currentTaskTruck?.plate}`}
                     onScan={handleScanVehicleForTask}
-                    suggestions={assignedTruck ? [assignedTruck.plate, assignedTruck.id] : []}
+                    suggestions={currentTaskTruck ? [currentTaskTruck.plate, currentTaskTruck.id] : []}
                   />
                 </div>
               )}
@@ -385,9 +423,13 @@ export function DispatchPage() {
           {selectedSO && selectedSO.status !== 'Fulfilled' && (
             <div className="mt-4 space-y-2 rounded-xl border border-slate-800 bg-slate-800/60 p-4 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-400">Assigned vehicle</span>
+                <span className="text-slate-400">
+                  Assigned vehicle{activeTrucks.length > 1 ? 's' : ''}
+                </span>
                 <span className="font-medium text-slate-200">
-                  {assignedTruck ? `${assignedTruck.plate} (${assignedTruck.dispatchLine})` : 'None'}
+                  {activeTrucks.length > 0
+                    ? activeTrucks.map((t) => `${t.plate} (${t.dispatchLine})`).join(', ')
+                    : 'None'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -434,6 +476,14 @@ export function DispatchPage() {
                     const productionArrived = productionDirectPallets.filter(
                       (p) => p.status === 'StagedForDispatch' || p.directDispatchArrivedAt,
                     );
+                    // Truck attribution for these pallets only exists once
+                    // they're staged (see generateManifestForPickingComplete)
+                    // — read it straight off the pallet rather than guessing
+                    // from the order, since more than one truck can be active.
+                    const stagedPallet = productionDirectPallets.find(
+                      (p) => p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine',
+                    );
+                    const productionTruckId = stagedPallet ? (stagedPallet.location as any).truckId : null;
                     return (
                       <li key={approval.id} className="flex items-center justify-between text-xs">
                         <span className="text-slate-300">
@@ -445,7 +495,7 @@ export function DispatchPage() {
                         <StatusPill
                           status={
                             productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
-                              ? (dispatchLineActuallyScanned ? 'Completed' : 'Staged')
+                              ? (isLineScannedForTruck(productionTruckId) ? 'Completed' : 'Staged')
                               : 'In Progress'
                           }
                         />
@@ -467,19 +517,26 @@ export function DispatchPage() {
               {currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker.
             </p>
           )}
-          {selectedSO && can(currentUser?.role, 'execute:scan') && !assignedTruck && (
+          {selectedSO && can(currentUser?.role, 'execute:scan') && activeTrucks.length === 0 && (
             <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
               No vehicle assigned to this sales order yet.
             </p>
           )}
-          {selectedSO && can(currentUser?.role, 'execute:scan') && assignedTruck && !pickingComplete && (
-            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              Picking is not complete yet — every assigned task must reach Completed before you can
-              stage at {assignedTruck.dispatchLine}.
-            </p>
-          )}
-          {selectedSO && can(currentUser?.role, 'execute:scan') && assignedTruck && pickingComplete && (
+          {/* Readiness is per truck, not per order — a picker whose own task
+              is done can scan and stage immediately even while a different
+              picker's task for another active vehicle is still in progress. */}
+          {selectedSO && can(currentUser?.role, 'execute:scan') && activeTrucks.length > 0 && (
             <div className="space-y-3">
+              <ul className="space-y-1 text-xs text-slate-400">
+                {activeTrucks.map((t) => (
+                  <li key={t.id} className="flex items-center justify-between">
+                    <span>{t.dispatchLine} ({t.plate})</span>
+                    <span className={pickingCompleteForTruck(t.id) ? 'text-emerald-400' : 'text-amber-400'}>
+                      {pickingCompleteForTruck(t.id) ? 'Ready to scan' : 'Picking in progress'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
               <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                 <span className={`rounded-full px-2 py-1 ${dispatchLineScanned ? 'bg-emerald-500/15 text-emerald-300' : 'bg-indigo-500/15 text-indigo-300'}`}>
                   1. Scan dispatch line
@@ -488,24 +545,24 @@ export function DispatchPage() {
                   2. Scan vehicle
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                All picking is complete — scan {assignedTruck.dispatchLine} and vehicle {assignedTruck.plate} to verify and complete.
-              </p>
               {!dispatchLineScanned ? (
                 <ScanInput
                   label="Step 1: Scan the dispatch line"
-                  placeholder={`e.g. ${assignedTruck.dispatchLine}`}
+                  placeholder={`e.g. ${activeTrucks[0].dispatchLine}`}
                   onScan={handleScanLine}
-                  suggestions={[assignedTruck.dispatchLine]}
+                  suggestions={activeTrucks.map((t) => t.dispatchLine)}
                 />
-              ) : (
-                <ScanInput
-                  label="Step 2: Scan vehicle barcode"
-                  placeholder={`e.g. ${assignedTruck.plate}`}
-                  onScan={handleScanVehicle}
-                  suggestions={[assignedTruck.plate, assignedTruck.id]}
-                />
-              )}
+              ) : (() => {
+                const scannedTruck = activeTrucks.find((t) => t.id === scannedTruckId);
+                return (
+                  <ScanInput
+                    label="Step 2: Scan vehicle barcode"
+                    placeholder={`e.g. ${scannedTruck?.plate}`}
+                    onScan={handleScanVehicle}
+                    suggestions={scannedTruck ? [scannedTruck.plate, scannedTruck.id] : []}
+                  />
+                );
+              })()}
             </div>
           )}
           {selectedSO?.status === 'Fulfilled' && (

@@ -178,7 +178,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:00:00.000Z',
-    assignedTruckId: null,
+    assignedTruckIds: [],
   },
   {
     id: 'SO002',
@@ -189,7 +189,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:15:00.000Z',
-    assignedTruckId: null,
+    assignedTruckIds: [],
   },
   {
     id: 'SO003',
@@ -199,7 +199,7 @@ export const INITIAL_SALES_ORDERS: SalesOrder[] = [
     ],
     status: 'Pending',
     createdAt: '2026-07-27T08:25:00.000Z',
-    assignedTruckId: null,
+    assignedTruckIds: [],
   },
 ];
 
