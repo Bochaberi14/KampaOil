@@ -63,33 +63,36 @@ export function DispatchPage() {
     const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
     if (!tasksForTruck.every((t) => t.status === 'Completed')) return false;
 
-    // A direct-dispatch task (Storage-sourced shortfall, bypassing the bay)
-    // turns 'Completed' the moment its pallet is released from the storage
-    // rack (scanRackForPick) — well before it's actually walked over and
-    // confirmed arrived. Without this, the truck looks "ready to scan" and
-    // can depart while that pallet is still in transit, permanently
-    // stranding its units (same failure mode Production Direct is guarded
-    // against below — 'StagedForDispatch' means captured by *this* truck's
-    // manifest, see generateManifestForPickingComplete).
-    const directDispatchTasksForTruck = tasksForTruck.filter((t) => t.directDispatch);
-    const directDispatchArrived = directDispatchTasksForTruck.every((t) =>
-      t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
-    );
-    if (!directDispatchArrived) return false;
-
     const verification = selectedSO
       ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
       : undefined;
     if (!verification) return false;
 
     // Checked by the pallet's own status, not membership in THIS truck's
-    // palletIds — an old approval from an earlier, already-departed truck's
-    // batch stays 'Approved' forever once resolved, and its pallets were
-    // rightly captured by that truck's manifest, not this one's. Requiring
-    // them in *this* verification would permanently block every later
-    // truck on the same sku. 'StagedForDispatch' means captured by some
-    // manifest generation already, whichever truck that was for.
+    // palletIds — an old approval/task from an earlier, already-departed
+    // truck's batch stays resolved forever, and its pallets were rightly
+    // captured by that truck's manifest, not this one's. Requiring them in
+    // *this* verification would permanently block every later truck on the
+    // same sku. 'StagedForDispatch' means captured by some manifest
+    // generation already, whichever truck that was for.
     const skus = new Set(verification.products.map((p) => p.sku));
+
+    // Storage direct-dispatch tasks no longer carry a truckId (the
+    // destination truck is only resolved at arrival-scan/manifest time,
+    // same as Production Direct) — match by SKU membership in this truck's
+    // own manifest instead. A task turns 'Completed' the moment its pallet
+    // is released from the storage rack (scanRackForPick), well before it's
+    // actually walked over and confirmed arrived — without this stronger
+    // per-pallet check, the truck could look "ready to scan" and depart
+    // while that pallet is still in transit, permanently stranding its units.
+    const relevantStorageDirectTasks = soPickTasks.filter(
+      (t) => t.origin === 'Storage' && t.directDispatch && t.items.some((i) => skus.has(i.sku)),
+    );
+    const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
+      t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
+    );
+    if (!storageDirectArrived) return false;
+
     const relevantApprovals = productionApprovals.filter((a) => skus.has(a.sku));
     return relevantApprovals.every((a) => {
       if ((a.palletsRemaining ?? 0) > 0) return false;

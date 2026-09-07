@@ -74,7 +74,7 @@ import {
   generateVehicleBarcodeId,
 } from '../engine/ids';
 import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
-import { recommendStorageLocation } from '../engine/storageRecommendation';
+import { recommendStorageLocation, recommendBayLocation } from '../engine/storageRecommendation';
 import { can, isPickerLocationMatch } from '../rbac';
 import { isDemoMode, setDemoMode } from '../demoMode';
 
@@ -394,10 +394,14 @@ interface WarehouseState {
     assignments: { pickerId: string; qty: number }[];
     operatorId: string;
   }) => Result<{ tasks: PickTask[] }>;
+  // Storage direct-dispatch: bypasses bay staging entirely, straight to the
+  // truck — requested/assigned by the Sales Manager now, not the Loader. No
+  // truck needed up front — same as Production Direct, the destination
+  // truck is only resolved later, at scanPalletArrivedForDirectDispatch /
+  // generateManifestForPickingComplete time.
   assignStorageDirectDispatchTasks: (args: {
     salesOrderId: string;
     lineId: string;
-    truckId: string;
     assignments: { pickerId: string; qty: number }[];
     operatorId: string;
   }) => Result<{ tasks: PickTask[] }>;
@@ -423,9 +427,11 @@ interface WarehouseState {
     dispatchLine: string;
     operatorId: string;
   }) => Result<{ allocation: DispatchAllocation }>;
-  // Direct-dispatch shortfall exception — requires HOD/Manager/Director approval.
-  // 'Storage' is the original bay-shortfall path; 'Production' pulls a still-
-  // Loaded pallet straight off the line, skipping storage and the bay.
+  // Direct-dispatch shortfall exception — requested by the Sales Manager
+  // (Sales HOD) from SalesHodPage, ahead of the Loader's own release.
+  // 'Storage' now auto-assigns a Picker to fetch it as a normal bay arrival;
+  // 'Production' still pulls a still-Loaded pallet straight off the line,
+  // skipping the bay entirely (unchanged).
   requestDirectDispatchApproval: (
     salesOrderId: string,
     lineId: string,
@@ -995,14 +1001,40 @@ export const useWarehouseStore = create<WarehouseState>()(
         // The Production Direct decision was already made — and the
         // approval's shortfall already consumed — back at confirmLoad time.
         // Honor that recorded decision rather than re-checking the approval,
-        // whose shortfall may have moved on by now.
+        // whose shortfall may have moved on by now. This is the one case
+        // that still bypasses the loading bay entirely, exactly like
+        // Storage direct-dispatch and exactly how it always worked — only
+        // who *requests* it changed (Sales Manager now, not the Loader).
         const isDirectDispatch = !!pallet.productionDirectDispatchApprovalId;
-        const newStatus = isDirectDispatch ? 'InTransitToTruck' : 'InTransitToStorage';
-        const destination = isDirectDispatch ? 'Dispatch (Production Direct)' : 'InTransit to Storage';
 
+        if (isDirectDispatch) {
+          set((state) => ({
+            pallets: state.pallets.map((p) =>
+              p.id === palletId ? { ...p, status: 'InTransitToTruck', location: { type: 'InTransit' } } : p,
+            ),
+            movements: [
+              ...state.movements,
+              {
+                id: generateMovementId(),
+                palletId,
+                from: 'Line',
+                to: 'Dispatch (Production Direct)',
+                timestamp: new Date().toISOString(),
+                operatorId,
+              },
+            ],
+          }));
+          get().pushToast(
+            `Pallet ${palletId} routed directly to dispatch per Production Direct approval`,
+            'success',
+          );
+          return ok(undefined);
+        }
+
+        // Normal path: unchanged — Line → Storage, exactly as it always was.
         set((state) => ({
           pallets: state.pallets.map((p) =>
-            p.id === palletId ? { ...p, status: newStatus, location: { type: 'InTransit' } } : p,
+            p.id === palletId ? { ...p, status: 'InTransitToStorage', location: { type: 'InTransit' } } : p,
           ),
           movements: [
             ...state.movements,
@@ -1010,19 +1042,12 @@ export const useWarehouseStore = create<WarehouseState>()(
               id: generateMovementId(),
               palletId,
               from: 'Line',
-              to: destination,
+              to: 'InTransit to Storage',
               timestamp: new Date().toISOString(),
               operatorId,
             },
           ],
         }));
-
-        if (isDirectDispatch) {
-          get().pushToast(
-            `Pallet ${palletId} routed directly to dispatch per Production Direct approval`,
-            'success',
-          );
-        }
         return ok(undefined);
       },
 
@@ -1264,6 +1289,12 @@ export const useWarehouseStore = create<WarehouseState>()(
         // Direct-dispatch (approved shortfall) top-ups bypass the Loading Bay entirely (spec §17)
         const isDirectDispatch = task.directDispatch;
         const taskCompleted = updatedItems.every((i) => i.picked);
+        // Precompute the bay-rack recommendation now, same reasoning as
+        // scanPalletLeavingLine — avoids double-booking a slot against other
+        // pallets (from Storage or Production) concurrently in transit to the bay.
+        const bayRec = !isDirectDispatch
+          ? recommendBayLocation(state.bayRacks, item.sku, palletId, state.pallets)
+          : null;
 
         set((state) => ({
           racks: state.racks.map((r) =>
@@ -1282,6 +1313,7 @@ export const useWarehouseStore = create<WarehouseState>()(
                   ...p,
                   status: isDirectDispatch ? 'InTransitToTruck' : 'InTransitToBay',
                   location: { type: 'InTransit' },
+                  recommendedBayLocation: bayRec ?? p.recommendedBayLocation,
                 }
               : p,
           ),
@@ -1561,16 +1593,13 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok({ tasks });
       },
 
-      assignStorageDirectDispatchTasks: ({ salesOrderId, lineId, truckId, assignments, operatorId: _operatorId }) => {
+      assignStorageDirectDispatchTasks: ({ salesOrderId, lineId, assignments, operatorId: _operatorId }) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'plan:dispatch')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot assign pickers — requires Loader`);
+        if (!can(state.currentUser?.role, 'request:directDispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot assign pickers — requires Sales Manager`);
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
-        if (!so.assignedTruckIds.includes(truckId)) {
-          return err(`Truck "${truckId}" is not currently active on ${salesOrderId}`);
-        }
         const line = so.lines.find((l) => l.id === lineId);
         if (!line) return err(`Line "${lineId}" not found on sales order ${salesOrderId}`);
         if (assignments.length === 0) return err('Assign at least one picker');
@@ -1624,7 +1653,9 @@ export const useWarehouseStore = create<WarehouseState>()(
             assignedPickerId: a.pickerId,
             directDispatch: true,  // Key flag: this bypasses staging
             createdAt: new Date().toISOString(),
-            truckId,
+            // No truck needed up front — resolved later at arrival-scan /
+            // manifest-generation time, same as Production Direct.
+            truckId: null,
           };
           tasks.push(task);
           set((s) => ({ pickTasks: [...s.pickTasks, task] }));
@@ -1837,6 +1868,28 @@ export const useWarehouseStore = create<WarehouseState>()(
           return err(`Only ${unreleased.toLocaleString()} units of ${salesOrderId} (${line.productName}) remain unreleased`);
         }
 
+        // Can't release more than is actually available in the bay plus
+        // whatever's incoming via an approved Direct Dispatch request — the
+        // Loader should never release stock that doesn't physically exist
+        // yet. "Incoming" is whatever the Sales HOD's approved request(s)
+        // still cover: Storage's shortfallQty (units), Production's
+        // palletsRemaining (converted to units).
+        const bayAvail = get().availableOnBay(line.sku);
+        const approvals = state.directDispatchApprovals.filter(
+          (a) => a.salesOrderId === salesOrderId && a.lineId === lineId && a.status === 'Approved',
+        );
+        const incoming = approvals.reduce((sum, a) => {
+          if (a.source === 'Storage') return sum + a.shortfallQty;
+          return sum + (a.palletsRemaining ?? 0) * unitsPerPallet(line.sku);
+        }, 0);
+        if (qty > bayAvail + incoming) {
+          return err(
+            incoming > 0
+              ? `Only ${bayAvail.toLocaleString()} available in the bay + ${incoming.toLocaleString()} incoming (${(bayAvail + incoming).toLocaleString()} total) for ${line.productName} — ask the Sales HOD to request more first`
+              : `Only ${bayAvail.toLocaleString()} available in the bay for ${line.productName} — nothing incoming yet. Ask the Sales HOD to request more from Storage/Production first`,
+          );
+        }
+
         const release: SalesOrderRelease = {
           id: generateReleaseId(),
           salesOrderId,
@@ -1930,18 +1983,23 @@ export const useWarehouseStore = create<WarehouseState>()(
 
       requestDirectDispatchApproval: (salesOrderId, lineId, operatorId, source = 'Storage', palletCount) => {
         const state = get();
-        if (!can(state.currentUser?.role, 'plan:dispatch')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot request a direct dispatch — requires Loader`);
+        if (!can(state.currentUser?.role, 'request:directDispatch')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot request a direct dispatch — requires Sales Manager`);
         }
         const so = state.salesOrders.find((s) => s.id === salesOrderId);
         if (!so) return err(`Sales order "${salesOrderId}" not found`);
         const line = so.lines.find((l) => l.id === lineId);
         if (!line) return err(`Line "${lineId}" not found on sales order ${salesOrderId}`);
-        // Capped by released quantity — a direct-dispatch shortfall can't
-        // pull unreleased stock either, same principle as requestTopUp. Using
-        // the full line (line.qty) here would treat everything still unreleased
-        // as "shortfall" too, vastly overstating how much needs to divert.
-        const remaining = line.releasedQty - line.dispatchedQty;
+
+        // The Sales HOD acts before the Loader releases anything — that's
+        // the whole point, so the Loader has Available/Incoming numbers to
+        // release against instead of an empty bay. So this is capped by the
+        // line's full outstanding quantity (ordered minus already dispatched),
+        // not by releasedQty like the Loader's own requestTopUp is — gating
+        // on releasedQty here would make it impossible to request anything
+        // until the Loader had already released, backwards from the intended
+        // order of operations.
+        const remaining = line.qty - line.dispatchedQty;
         if (remaining <= 0) return err(`${salesOrderId} (${line.productName}) is already fulfilled`);
 
         // Shortfall is what's left after everything already available on the
@@ -2032,9 +2090,10 @@ export const useWarehouseStore = create<WarehouseState>()(
           return ok({ approval });
         }
 
-        // For Storage source, the Loader assigns Storage Pickers directly
-        // (assignStorageDirectDispatchTasks) — this just records the approval
-        // for tracking/UI display, it does not create its own pick task.
+        // For Storage source, the Sales Manager assigns Storage Pickers
+        // directly (assignStorageDirectDispatchTasks) — this just records
+        // the approval for tracking/UI display, it does not create its own
+        // pick task.
         get().pushToast(
           `Direct dispatch from Storage approved for ${salesOrderId} — ${shortfall.toLocaleString()} units — assign Storage Pickers to pick it`,
           'success',

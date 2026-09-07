@@ -41,9 +41,6 @@ export function StoragePage() {
     rackId: null,
   });
 
-
-
-
   const loadedPallets = pallets
     .filter((p) => p.status === 'Loaded' && p.location.type !== 'Line')
     .map((p) => p.id);
@@ -78,8 +75,8 @@ export function StoragePage() {
     }
 
     // Production Direct Dispatch: pallet is now InTransitToTruck — it skips
-    // racking entirely and heads straight to dispatch, so don't send the
-    // picker into the rack-placement step.
+    // storage and the bay entirely, heading straight toward dispatch, so
+    // don't send the picker into the rack-placement step.
     const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
     if (updatedPallet?.status === 'InTransitToTruck') {
       pushToast(`⚡ Pallet ${palletId} routed directly to dispatch — bypassing storage`, 'success');
@@ -127,7 +124,6 @@ export function StoragePage() {
     pushToast(`✓ Pallet ${wizard.palletId} successfully placed at ${formatStorageLocation(freshRecommendation)}`, 'success');
     setWizard({ step: 'pallet-arriving', palletId: null });
   }
-
 
   function cancel() {
     setWizard({ step: 'pallet-arriving', palletId: null });
@@ -178,7 +174,6 @@ export function StoragePage() {
     pushToast(`✓ Pallet ${pickingWizard.palletId} released from storage — ready for loading bay`, 'success');
     setPickingWizard({ step: 'pallet-at-rack', taskId: null, palletId: null, rackId: null });
   }
-
 
   return (
     <div className="space-y-8">

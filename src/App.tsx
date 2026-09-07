@@ -13,6 +13,7 @@ import { HoldPage } from './pages/HoldPage';
 import { RecallPage } from './pages/RecallPage';
 import { AuditPage } from './pages/AuditPage';
 import { DispatchPlanningPage } from './pages/DispatchPlanningPage';
+import { SalesHodPage } from './pages/SalesHodPage';
 import { ReturnsPage } from './pages/ReturnsPage';
 import { BarcodesPage } from './pages/BarcodesPage';
 import { ZoneInventoryPage } from './pages/ZoneInventoryPage';
@@ -104,6 +105,14 @@ function App() {
               element={
                 <RoleRoute permission="view:loader">
                   <DispatchPlanningPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/sales-hod"
+              element={
+                <RoleRoute permission="view:sales-hod">
+                  <SalesHodPage />
                 </RoleRoute>
               }
             />

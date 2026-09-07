@@ -210,7 +210,7 @@ export function ProductionPage() {
                     ⚡ Move direct to dispatch
                   </p>
                   <p className="text-xs text-green-100">
-                    Do not move this pallet to storage — a Storage Picker will scan it leaving the line, then
+                    Do not move this pallet to storage — a Loading Bay Picker will scan it leaving the line, then
                     confirm arrival at the loading bay, then straight to dispatch.
                   </p>
                 </div>

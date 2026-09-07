@@ -11,6 +11,7 @@ export type Permission =
   | 'view:recall'
   | 'view:audit'
   | 'view:loader'
+  | 'view:sales-hod'
   | 'view:returns'
   | 'view:barcodes'
   | 'view:security'
@@ -20,6 +21,7 @@ export type Permission =
   | 'approve:hold'
   | 'approve:recall'
   | 'approve:directDispatch'
+  | 'request:directDispatch'
   | 'sign:dispatch'
   | 'report:discrepancy'
   | 'flag:hold'
@@ -97,7 +99,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'decide:return',
   ],
   'Customer Return Clerk': ['view:dashboard', 'view:returns', 'report:return', 'view:barcodes'],
-  'Sales Manager': ['view:dashboard', 'view:returns'],
+  // Sales Manager checks Loading Bay/Storage/Production availability for a
+  // sales order and requests stock from Storage and/or Production ahead of
+  // the Loader's release — the Loader only sees the resulting Available/
+  // Incoming totals and releases against them (see SalesHodPage.tsx).
+  'Sales Manager': ['view:dashboard', 'view:returns', 'view:sales-hod', 'request:directDispatch'],
 };
 
 export const ROLE_BLURB: Record<Role, string> = {
@@ -109,7 +115,7 @@ export const ROLE_BLURB: Record<Role, string> = {
   Loader: 'Coordinates dispatch end-to-end — releases orders, assigns pickers, registers & verifies the vehicle, signs the handover',
   QA: 'Quality assurance — approve/reject holds, decide recall outcomes, review & decide customer returns',
   'Customer Return Clerk': 'Log customer returns — product, quantity, defect photo & remarks',
-  'Sales Manager': 'Sales-side visibility into returns for customer/order reconciliation',
+  'Sales Manager': 'Sales-side visibility into returns for customer/order reconciliation — checks Bay/Storage/Production availability and requests stock ahead of the Loader\'s release',
 };
 
 export const ROUTE_PERMISSION: Record<string, Permission> = {
@@ -122,6 +128,7 @@ export const ROUTE_PERMISSION: Record<string, Permission> = {
   '/recall': 'view:recall',
   '/audit': 'view:audit',
   '/dispatch-planning': 'view:loader',
+  '/sales-hod': 'view:sales-hod',
   '/returns': 'view:returns',
   '/barcodes': 'view:barcodes',
   '/security': 'view:security',

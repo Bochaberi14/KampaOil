@@ -5,6 +5,7 @@ import { DispatchManifest } from '../components/DispatchManifest';
 import { VehicleBarcodePage } from '../components/VehicleBarcodePage';
 import { filterPickersByType, getPickerType } from '../rbac';
 import { USERS } from '../data/seed';
+import { unitsPerPallet } from '../data/products';
 import type { SalesOrder, SalesOrderLine } from '../types/domain';
 
 type OrderTab = 'new' | 'pending' | 'inProgress' | 'completed';
@@ -496,7 +497,6 @@ function DispatchOrderPanel({
                 key={line.id}
                 order={order}
                 line={line}
-                soPickTasks={soPickTasks}
                 availablePickers={availablePickers}
                 availableOnBay={availableOnBay}
                 availableInStorage={availableInStorage}
@@ -618,7 +618,6 @@ function DispatchOrderPanel({
 function LineReleasePanel({
   order,
   line,
-  soPickTasks,
   availablePickers,
   availableOnBay,
   availableInStorage,
@@ -628,18 +627,25 @@ function LineReleasePanel({
   const currentUser = useWarehouseStore((s) => s.currentUser);
   const releaseSalesOrderQuantity = useWarehouseStore((s) => s.releaseSalesOrderQuantity);
   const assignDispatchPickingTasks = useWarehouseStore((s) => s.assignDispatchPickingTasks);
-  const assignStorageDirectDispatchTasks = useWarehouseStore((s) => s.assignStorageDirectDispatchTasks);
-  const requestDirectDispatchApproval = useWarehouseStore((s) => s.requestDirectDispatchApproval);
   const pushToast = useWarehouseStore((s) => s.pushToast);
 
   const [releaseQty, setReleaseQty] = useState('');
   const [pickerRows, setPickerRows] = useState<{ pickerId: string; qty: string }[]>([{ pickerId: '', qty: '' }]);
-  const [storagePickerRows, setStoragePickerRows] = useState<{ pickerId: string; qty: string }[]>([]);
-  const [directDispatchRequests, setDirectDispatchRequests] = useState<Set<'Storage' | 'Production'>>(new Set());
-  const [selectedDirectDispatchSource, setSelectedDirectDispatchSource] = useState<'Storage' | 'Production' | null>(null);
-  const [productionPalletCount, setProductionPalletCount] = useState('1');
 
   const remainingToRelease = line.qty - line.releasedQty;
+
+  // Mirrors the store's own releaseSalesOrderQuantity cap — can't release
+  // more than is physically available in the bay plus whatever's incoming
+  // via an approved Direct Dispatch request (Sales HOD), so this never lets
+  // the Loader type in a quantity the store will just reject anyway.
+  const bayAvailForCap = availableOnBay(line.sku);
+  const incomingApproved = directDispatchApprovals
+    .filter((a: any) => a.salesOrderId === order.id && a.lineId === line.id && a.status === 'Approved')
+    .reduce((sum: number, a: any) => {
+      if (a.source === 'Storage') return sum + a.shortfallQty;
+      return sum + (a.palletsRemaining ?? 0) * unitsPerPallet(line.sku);
+    }, 0);
+  const releasableNow = Math.min(remainingToRelease, bayAvailForCap + incomingApproved);
 
   if (remainingToRelease <= 0) {
     return (
@@ -672,17 +678,11 @@ function LineReleasePanel({
     setPickerRows((rows) => rows.filter((_, i) => i !== index));
   }
 
-  function handleRemoveStoragePickerRow(index: number) {
-    setStoragePickerRows((rows) => rows.filter((_, i) => i !== index));
-  }
-
   function handleAssignPickers(): boolean {
     if (!currentUser) return false;
 
     // Every row that has a picker OR a qty must have both — no half-filled rows
-    const incomplete = [...pickerRows, ...storagePickerRows].some(
-      (r) => (r.pickerId && !r.qty) || (!r.pickerId && r.qty),
-    );
+    const incomplete = pickerRows.some((r) => (r.pickerId && !r.qty) || (!r.pickerId && r.qty));
     if (incomplete) {
       pushToast('Enter a quantity for every picker you selected (or remove the empty row)', 'error');
       return false;
@@ -691,34 +691,28 @@ function LineReleasePanel({
     const bayAssignments = pickerRows
       .filter((r) => r.pickerId && r.qty)
       .map((r) => ({ pickerId: r.pickerId, qty: Number(r.qty) }));
-    const storageAssignments = storagePickerRows
-      .filter((r) => r.pickerId && r.qty)
-      .map((r) => ({ pickerId: r.pickerId, qty: Number(r.qty) }));
-
-    const allAssignments = [...bayAssignments, ...storageAssignments];
 
     // Production Direct Dispatch needs no picker at all — the pallet is
-    // pulled straight off the line and routed to dispatch when it's scanned
-    // leaving production, with nobody assigned to "pick" it. Only require a
-    // picker for whatever this release still needs from bay/storage once
-    // that's accounted for.
-    const needed = Number(releaseQty) || 0;
-    const { fromProd } = computeSourcing(needed);
-    const productionCoveredQty = directDispatchRequests.has('Production') ? fromProd : 0;
-    const needsPickerAssignment = needed - productionCoveredQty > 0;
+    // pulled straight off the line and routed to the loading bay when it's
+    // scanned leaving production, with nobody assigned to "pick" it. If the
+    // Sales HOD already has an approved Production Direct request active on
+    // this line, don't force a bay picker.
+    const productionDirectActive = directDispatchApprovals.some(
+      (a: any) => a.salesOrderId === order.id && a.lineId === line.id && a.status === 'Approved' && a.source === 'Production',
+    );
 
-    if (allAssignments.length === 0 && needsPickerAssignment) {
+    if (bayAssignments.length === 0 && !productionDirectActive) {
       pushToast('Add at least one picker', 'error');
       return false;
     }
 
-    if (allAssignments.length > 0 && !truckId) {
+    if (bayAssignments.length > 0 && !truckId) {
       pushToast('Select which vehicle this is for first', 'error');
       return false;
     }
 
     // Check for duplicate pickers
-    const pickerIds = allAssignments.map((a) => a.pickerId);
+    const pickerIds = bayAssignments.map((a) => a.pickerId);
     const duplicates = pickerIds.filter((id, idx) => pickerIds.indexOf(id) !== idx);
     if (duplicates.length > 0) {
       pushToast(
@@ -739,25 +733,7 @@ function LineReleasePanel({
         );
         return false;
       }
-    }
 
-    // Assign storage pickers (for Storage Direct dispatch)
-    if (storageAssignments.length > 0) {
-      const storageResult = assignStorageDirectDispatchTasks({
-        salesOrderId: order.id,
-        lineId: line.id,
-        truckId,
-        assignments: storageAssignments,
-        operatorId: currentUser.id,
-      });
-      if (!storageResult.ok) {
-        pushToast(storageResult.error, 'error');
-        return false;
-      }
-    }
-
-    // Assign bay pickers (for normal dispatch)
-    if (bayAssignments.length > 0) {
       const bayResult = assignDispatchPickingTasks({
         salesOrderId: order.id,
         lineId: line.id,
@@ -771,9 +747,10 @@ function LineReleasePanel({
       }
     }
 
-    pushToast(`Assigned ${allAssignments.length} picker(s)`, 'success');
-    setPickerRows([{ pickerId: '', qty: '' }]);
-    setStoragePickerRows([]);
+    if (bayAssignments.length > 0) {
+      pushToast(`Assigned ${bayAssignments.length} picker(s)`, 'success');
+      setPickerRows([{ pickerId: '', qty: '' }]);
+    }
     return true;
   }
 
@@ -782,6 +759,15 @@ function LineReleasePanel({
     const parsedQty = Number(releaseQty);
     if (!parsedQty || parsedQty > remainingToRelease) {
       pushToast('Enter valid quantity', 'error');
+      return;
+    }
+    if (parsedQty > releasableNow) {
+      pushToast(
+        incomingApproved > 0
+          ? `Only ${bayAvailForCap.toLocaleString()} available in the bay + ${incomingApproved.toLocaleString()} incoming (${releasableNow.toLocaleString()} total) — ask the Sales HOD to request more first`
+          : `Only ${bayAvailForCap.toLocaleString()} available in the bay — nothing incoming yet. Ask the Sales HOD to request more from Storage/Production first`,
+        'error',
+      );
       return;
     }
 
@@ -796,19 +782,8 @@ function LineReleasePanel({
       return;
     }
 
-    // Auto-trigger direct dispatch requests for selected sources
-    if (directDispatchRequests.has('Storage')) {
-      requestDirectDispatchApproval(order.id, line.id, currentUser.id, 'Storage');
-    }
-    if (directDispatchRequests.has('Production')) {
-      const palletCount = Math.max(1, Number(productionPalletCount) || 1);
-      requestDirectDispatchApproval(order.id, line.id, currentUser.id, 'Production', palletCount);
-    }
-
     pushToast(`Released ${parsedQty} units of ${line.productName} for ${order.id}`, 'success');
     setReleaseQty('');
-    setDirectDispatchRequests(new Set());
-    setProductionPalletCount('1');
   }
 
   const lineApproval = directDispatchApprovals.find(
@@ -843,7 +818,16 @@ function LineReleasePanel({
 
       {/* Release Quantity Input */}
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-slate-300">Quantity to Release (max: {remainingToRelease})</label>
+        <label className="block text-xs font-medium text-slate-300">
+          Quantity to Release (max: {releasableNow.toLocaleString()}
+          {releasableNow < remainingToRelease ? ` of ${remainingToRelease.toLocaleString()} ordered` : ''})
+        </label>
+        {releasableNow < remainingToRelease && (
+          <p className="text-xs text-amber-300">
+            Capped by what's available — {bayAvailForCap.toLocaleString()} in the bay
+            {incomingApproved > 0 ? ` + ${incomingApproved.toLocaleString()} incoming` : ' and nothing incoming yet'}.
+          </p>
+        )}
         <input
           type="text"
           inputMode="numeric"
@@ -851,7 +835,7 @@ function LineReleasePanel({
           value={releaseQty}
           onChange={(e) => {
             const val = e.target.value.replace(/[^0-9]/g, '');
-            if (val === '' || Number(val) <= remainingToRelease) {
+            if (val === '' || Number(val) <= releasableNow) {
               setReleaseQty(val);
             }
           }}
@@ -859,101 +843,6 @@ function LineReleasePanel({
           placeholder="Enter quantity"
         />
       </div>
-
-      {/* Request Direct Dispatch - only when the release qty exceeds what's on the bay */}
-      {releaseQty && (() => {
-        const needed = Number(releaseQty);
-        const { bayAvail, fromBay, fromStorage, fromProd } = computeSourcing(needed);
-        const shortfall = needed - fromBay;
-        if (shortfall <= 0) return null;
-
-        return (
-          <div className="rounded-lg border border-green-800/50 bg-green-900/20 p-3 space-y-3">
-            <p className="text-xs font-semibold text-green-300">Direct Dispatch Requests</p>
-
-            <div className="space-y-1.5">
-              <p className="text-xs text-green-100">
-                Bay has {bayAvail.toLocaleString()} units. Need {shortfall.toLocaleString()} more
-                {fromStorage > 0 ? ' from Storage' : ''} — assign pickers below.
-              </p>
-              {fromStorage > 0 && (
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={directDispatchRequests.has('Storage')}
-                    onChange={() => {
-                      const newSet = new Set(directDispatchRequests);
-                      if (newSet.has('Storage')) {
-                        newSet.delete('Storage');
-                        if (selectedDirectDispatchSource === 'Storage') {
-                          setSelectedDirectDispatchSource(null);
-                        }
-                        setStoragePickerRows([]);
-                      } else {
-                        newSet.add('Storage');
-                        setSelectedDirectDispatchSource('Storage');
-                        if (storagePickerRows.length === 0) {
-                          setStoragePickerRows([{ pickerId: '', qty: '' }]);
-                        }
-                      }
-                      setDirectDispatchRequests(newSet);
-                    }}
-                    className="rounded"
-                  />
-                  Request {fromStorage.toLocaleString()} from Storage
-                </label>
-              )}
-            </div>
-
-            {fromProd > 0 && (
-              <div className="space-y-1.5 border-t border-green-800/40 pt-2">
-                <p className="text-xs text-green-100">
-                  {fromStorage > 0
-                    ? `Storage provides ${fromStorage.toLocaleString()}, need ${fromProd.toLocaleString()} from Production.`
-                    : `Storage is empty — need ${fromProd.toLocaleString()} from Production.`}
-                </p>
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={directDispatchRequests.has('Production')}
-                    onChange={() => {
-                      const newSet = new Set(directDispatchRequests);
-                      if (newSet.has('Production')) {
-                        newSet.delete('Production');
-                        if (selectedDirectDispatchSource === 'Production') {
-                          setSelectedDirectDispatchSource(null);
-                        }
-                      } else {
-                        newSet.add('Production');
-                        setSelectedDirectDispatchSource('Production');
-                      }
-                      setDirectDispatchRequests(newSet);
-                    }}
-                    className="rounded"
-                  />
-                  Request {fromProd.toLocaleString()} from Production
-                </label>
-                {directDispatchRequests.has('Production') && (
-                  <div className="flex items-center gap-2 pl-6">
-                    <label className="text-xs text-slate-400" htmlFor={`production-pallet-count-${line.id}`}>
-                      Pallets to divert
-                    </label>
-                    <input
-                      id={`production-pallet-count-${line.id}`}
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={productionPalletCount}
-                      onChange={(e) => setProductionPalletCount(e.target.value)}
-                      className="w-16 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })()}
 
       {/* Direct Dispatch Status - After release */}
       {lineApproval && (
@@ -971,64 +860,6 @@ function LineReleasePanel({
       {/* Assign Pickers Based on Released Quantity */}
       {releaseQty && (
         <div className="space-y-2">
-          {/* Storage Pickers Section - if Storage is checked */}
-          {directDispatchRequests.has('Storage') && (
-            <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-3 space-y-2">
-              <label className="block text-xs font-medium text-green-200">Storage Pickers for Direct Dispatch</label>
-              {storagePickerRows.map((row, i) => (
-                <div key={i} className="flex gap-2">
-                  <select
-                    value={row.pickerId}
-                    onChange={(e) => {
-                      const newRows = [...storagePickerRows];
-                      newRows[i].pickerId = e.target.value;
-                      setStoragePickerRows(newRows);
-                    }}
-                    className="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
-                  >
-                    <option value="">Select storage picker...</option>
-                    {USERS.filter((u) => u.role === 'Picker' && getPickerType(u.id) === 'storage').filter((u) => {
-                      const hasOngoingTask = soPickTasks.some((t: any) => t.assignedPickerId === u.id && t.status === 'Accepted');
-                      return !hasOngoingTask;
-                    }).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={row.qty}
-                    onChange={(e) => {
-                      const val = e.target.value.replace(/[^0-9]/g, '');
-                      if (val === '' || Number(val) <= Number(releaseQty)) {
-                        const newRows = [...storagePickerRows];
-                        newRows[i].qty = val;
-                        setStoragePickerRows(newRows);
-                      }
-                    }}
-                    placeholder="Qty"
-                    className="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white [&::-webkit-outer-spin-button]:hidden [&::-webkit-inner-spin-button]:hidden"
-                  />
-                  {storagePickerRows.length > 1 && (
-                    <button
-                      onClick={() => handleRemoveStoragePickerRow(i)}
-                      className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-              ))}
-              <button
-                onClick={() => setStoragePickerRows([...storagePickerRows, { pickerId: '', qty: '' }])}
-                className="w-full rounded border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
-              >
-                + Add Storage Picker
-              </button>
-            </div>
-          )}
-
           {/* Loading Bay Pickers Section — only shown when the bay actually
               has something to assign. With 0 units on the bay there's
               nothing for a bay picker to move, so presenting this section

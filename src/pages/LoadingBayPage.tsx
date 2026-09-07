@@ -52,7 +52,7 @@ export function LoadingBayPage() {
   const [stagingRequest, setStagingRequest] = useState({ sku: '', qty: '' });
 
   const palletsInTransitToBay = useWarehouseStore((s) => s.pallets).filter((p) => p.status === 'InTransitToBay');
-  // Direct-dispatch pallets (Storage or Production Direct) bypass staging but
+  // Direct-dispatch pallets (Storage-sourced shortfall) bypass staging but
   // still need one arrival scan at the bay before heading to dispatch.
   const palletsAwaitingDirectDispatchArrival = useWarehouseStore((s) => s.pallets).filter(
     (p) => p.status === 'InTransitToTruck' && !p.directDispatchArrivedAt,
@@ -144,7 +144,9 @@ export function LoadingBayPage() {
     // InTransitToTruck), so it can never point at a pallet that's still
     // sitting racked in storage. Releasing it from the rack is the Storage
     // page's job (its own picking workflow, scanRackForPick); this screen
-    // only ever receives a pallet that's already left.
+    // only ever receives a pallet that's already left — whether from a
+    // normal Storage pick, or straight off the line for a Production
+    // Direct pallet (scanPalletLeavingLine already routed it here).
     const expectedPalletId = nextPalletToReceive?.id;
     if (!expectedPalletId) return;
 
@@ -155,8 +157,8 @@ export function LoadingBayPage() {
 
     const scannedPallet = pallets.find((p) => p.id === palletId);
 
-    // Direct dispatch (Storage or Production Direct): confirm arrival only —
-    // no destination rack, take it straight to dispatch instead.
+    // Direct dispatch (Storage): confirm arrival only — no destination
+    // rack, take it straight to dispatch instead.
     if (scannedPallet?.status === 'InTransitToTruck') {
       const result = scanPalletArrivedForDirectDispatch({ palletId, operatorId: currentUser.id });
       if (!result.ok) {
