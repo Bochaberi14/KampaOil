@@ -63,6 +63,20 @@ export function DispatchPage() {
     const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
     if (!tasksForTruck.every((t) => t.status === 'Completed')) return false;
 
+    // A direct-dispatch task (Storage-sourced shortfall, bypassing the bay)
+    // turns 'Completed' the moment its pallet is released from the storage
+    // rack (scanRackForPick) — well before it's actually walked over and
+    // confirmed arrived. Without this, the truck looks "ready to scan" and
+    // can depart while that pallet is still in transit, permanently
+    // stranding its units (same failure mode Production Direct is guarded
+    // against below — 'StagedForDispatch' means captured by *this* truck's
+    // manifest, see generateManifestForPickingComplete).
+    const directDispatchTasksForTruck = tasksForTruck.filter((t) => t.directDispatch);
+    const directDispatchArrived = directDispatchTasksForTruck.every((t) =>
+      t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
+    );
+    if (!directDispatchArrived) return false;
+
     const verification = selectedSO
       ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
       : undefined;

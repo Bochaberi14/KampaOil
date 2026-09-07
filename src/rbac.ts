@@ -1,4 +1,5 @@
 import type { CustomerReturn, Role, User } from './types/domain';
+import { isDemoMode } from './demoMode';
 
 export type Permission =
   | 'view:dashboard'
@@ -128,6 +129,7 @@ export const ROUTE_PERMISSION: Record<string, Permission> = {
 };
 
 export function can(role: Role | undefined, permission: Permission): boolean {
+  if (isDemoMode()) return true;
   if (!role) return false;
   return ROLE_PERMISSIONS[role].includes(permission);
 }
@@ -161,6 +163,16 @@ export function getPickerType(pickerId: string): PickerType {
   if (pickerId.startsWith('pick-stor-')) return 'storage';
   if (pickerId.startsWith('pick-bay-')) return 'loading-bay';
   return 'unknown';
+}
+
+// Real pickers are pinned to one physical location by their id prefix, so a
+// single user normally can't scan production, then storage, then the
+// loading bay. Demo mode needs exactly that, so every location check goes
+// through here instead of comparing getPickerType() directly.
+export function isPickerLocationMatch(pickerId: string | undefined, type: PickerType): boolean {
+  if (isDemoMode()) return true;
+  if (!pickerId) return false;
+  return getPickerType(pickerId) === type;
 }
 
 // Filter pickers by location/type

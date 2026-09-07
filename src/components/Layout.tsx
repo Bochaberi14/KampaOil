@@ -4,6 +4,7 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { ToastStack } from './ToastStack';
 import { SapSyncPanel } from './SapSyncPanel';
 import { can, canViewReturn, type Permission } from '../rbac';
+import { isDemoMode } from '../demoMode';
 
 const NAV: { to: string; label: string; permission: Permission }[] = [
   { to: '/dashboard', label: 'Dashboard', permission: 'view:dashboard' },
@@ -166,6 +167,11 @@ export function Layout() {
             {user && (
               <span className="text-sm text-slate-400">
                 {user.name} <span className="text-slate-600">·</span> {user.role}
+              </span>
+            )}
+            {isDemoMode() && (
+              <span className="rounded-full border border-emerald-800 bg-emerald-950/40 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                ✨ Demo Mode — full access
               </span>
             )}
             <SapSyncPanel />

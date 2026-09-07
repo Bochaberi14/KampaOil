@@ -5,7 +5,8 @@ import { RackGrid } from '../components/RackGrid';
 import { countFreeRackSlots, countRackedPallets } from '../engine/rules';
 import { recommendStorageLocation, formatStorageLocation } from '../engine/storageRecommendation';
 import { STORAGE_ZONES } from '../data/seed';
-import { canAccessDepartment, getPickerType } from '../rbac';
+import { canAccessDepartment, isPickerLocationMatch } from '../rbac';
+import { isDemoMode } from '../demoMode';
 
 type WizardStep = 'pallet-arriving' | 'rack-placement';
 type PickingStep = 'pallet-at-rack' | 'rack-scan';
@@ -189,7 +190,7 @@ export function StoragePage() {
       </div>
 
       {/* Storage Receiving Workflow - ONLY for Storage Pickers */}
-      {currentUser && getPickerType(currentUser.id) === 'storage' && (
+      {currentUser && isPickerLocationMatch(currentUser.id, 'storage') && (
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
             <StepDot active={wizard.step === 'pallet-arriving'} label="1. Scan pallet arriving" />
@@ -270,8 +271,10 @@ export function StoragePage() {
       )}
 
       {/* Picking workflow - when stock is requested (Storage Pickers only) */}
-      {currentUser && getPickerType(currentUser.id) === 'storage' && (() => {
-        const myTasks = pickTasks.filter((t) => t.assignedPickerId === currentUser.id && t.status === 'Accepted');
+      {currentUser && isPickerLocationMatch(currentUser.id, 'storage') && (() => {
+        const myTasks = pickTasks.filter(
+          (t) => (isDemoMode() || t.assignedPickerId === currentUser.id) && t.status === 'Accepted',
+        );
         const activePicking = pickingWizard.taskId && myTasks.find((t) => t.id === pickingWizard.taskId);
 
         // If picking wizard is active but task is no longer assigned to this user, clear it

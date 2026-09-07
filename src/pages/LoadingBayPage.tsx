@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useWarehouseStore, reservedPalletIds } from '../store/useWarehouseStore';
 import { ScanInput } from '../components/ScanInput';
 import { RackGrid } from '../components/RackGrid';
-import { can, canAccessDepartment, getPickerType } from '../rbac';
+import { can, canAccessDepartment, isPickerLocationMatch } from '../rbac';
+import { isDemoMode } from '../demoMode';
 import { recommendBayLocation, formatBayLocation } from '../engine/storageRecommendation';
 import { PRODUCTS } from '../data/products';
 import { LOADING_BAY_ZONES, LOADING_BAY_SHELVES } from '../data/seed';
@@ -19,7 +20,6 @@ export function LoadingBayPage() {
   const customerReturns = useWarehouseStore((s) => s.customerReturns);
   const actionReturnDecision = useWarehouseStore((s) => s.actionReturnDecision);
   const requestStockFromStorageToLoadingBay = useWarehouseStore((s) => s.requestStockFromStorageToLoadingBay);
-  const scanPalletLeavingStorage = useWarehouseStore((s) => s.scanPalletLeavingStorage);
   const placePalletInBay = useWarehouseStore((s) => s.placePalletInBay);
   const scanPalletArrivedForDirectDispatch = useWarehouseStore((s) => s.scanPalletArrivedForDirectDispatch);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
@@ -57,13 +57,7 @@ export function LoadingBayPage() {
   const palletsAwaitingDirectDispatchArrival = useWarehouseStore((s) => s.pallets).filter(
     (p) => p.status === 'InTransitToTruck' && !p.directDispatchArrivedAt,
   );
-  const isLoadingBayPicker = currentUser ? getPickerType(currentUser.id) === 'loading-bay' : false;
-  const myPutAwayTasks = pickTasks.filter(
-    (t) => t.status === 'Accepted' && t.assignedPickerId === currentUser?.id && (t.origin === 'Storage' || t.origin === 'Production'),
-  );
-  const currentPutAwayTask = myPutAwayTasks[0] ?? null;
-
-  const currentPutAwayItem = currentPutAwayTask?.items.find((item) => !item.picked) ?? null;
+  const isLoadingBayPicker = currentUser ? isPickerLocationMatch(currentUser.id, 'loading-bay') : false;
   const nextPalletToReceive = palletsInTransitToBay[0] ?? palletsAwaitingDirectDispatchArrival[0];
 
   const getStorageInventoryByProduct = () => {
@@ -145,7 +139,13 @@ export function LoadingBayPage() {
   function handleScanPalletArriving(palletId: string) {
     if (!currentUser) return;
 
-    const expectedPalletId = currentPutAwayItem?.palletId || nextPalletToReceive?.id;
+    // nextPalletToReceive is the only source of "what to expect here" — it's
+    // read straight off the pallet's own status (InTransitToBay /
+    // InTransitToTruck), so it can never point at a pallet that's still
+    // sitting racked in storage. Releasing it from the rack is the Storage
+    // page's job (its own picking workflow, scanRackForPick); this screen
+    // only ever receives a pallet that's already left.
+    const expectedPalletId = nextPalletToReceive?.id;
     if (!expectedPalletId) return;
 
     if (palletId !== expectedPalletId) {
@@ -169,20 +169,6 @@ export function LoadingBayPage() {
     }
 
     setLastDirectDispatchArrival(null);
-
-    // If there's a put-away task from storage, mark item as picked
-    if (currentPutAwayTask && currentPutAwayItem && currentPutAwayTask.origin === 'Storage') {
-      const result = scanPalletLeavingStorage({
-        pickTaskId: currentPutAwayTask.id,
-        palletId,
-        operatorId: currentUser.id,
-      });
-      if (!result.ok) {
-        pushToast(result.error, 'error');
-        return;
-      }
-    }
-
     pushToast(`✓ Pallet ${palletId} arrived at loading bay — scan staging location`, 'success');
     setWizard((w) => ({ ...w, step: 'bay-staging', palletId }));
   }
@@ -438,7 +424,7 @@ export function LoadingBayPage() {
         </div>
       )}
 
-      {isLoadingBayPicker && (currentPutAwayTask || nextPalletToReceive || lastDirectDispatchArrival) && (
+      {isLoadingBayPicker && (nextPalletToReceive || lastDirectDispatchArrival) && (
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-lg font-semibold text-slate-200">Intake Workflow</h2>
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
@@ -459,8 +445,8 @@ export function LoadingBayPage() {
             </div>
           )}
 
-          {wizard.step === 'bay-arriving' && (currentPutAwayItem || nextPalletToReceive) && (() => {
-            const expectedId = currentPutAwayItem?.palletId || nextPalletToReceive?.id;
+          {wizard.step === 'bay-arriving' && nextPalletToReceive && (() => {
+            const expectedId = nextPalletToReceive?.id;
             const expectedPallet = expectedId ? pallets.find((p) => p.id === expectedId) : undefined;
             const isDirect = expectedPallet?.status === 'InTransitToTruck';
             return (
@@ -518,7 +504,9 @@ export function LoadingBayPage() {
 
       {/* Dispatch workflow - releasing pallets to vehicles */}
       {isLoadingBayPicker && (() => {
-        const dispatchTasks = pickTasks.filter((t) => t.assignedPickerId === currentUser?.id && t.status === 'Accepted' && t.origin === 'Dispatch');
+        const dispatchTasks = pickTasks.filter(
+          (t) => (isDemoMode() || t.assignedPickerId === currentUser?.id) && t.status === 'Accepted' && t.origin === 'Dispatch',
+        );
         const activeDispatch = dispatchWizard.taskId && dispatchTasks.find((t) => t.id === dispatchWizard.taskId);
 
         if (dispatchWizard.taskId && !activeDispatch) {

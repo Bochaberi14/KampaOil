@@ -9,6 +9,7 @@ type LoginStep = 'select' | 'credentials' | 'totp';
 
 export function LoginPage() {
   const login = useWarehouseStore((s) => s.login);
+  const loginDemo = useWarehouseStore((s) => s.loginDemo);
   const loadSapData = useWarehouseStore((s) => s.loadSapData);
   const [step, setStep] = useState<LoginStep>('select');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -106,8 +107,10 @@ export function LoginPage() {
   }
 
   async function handleDemoAccess() {
-    // Demo mode: skip login and go directly to dashboard
-    login('dir1'); // Default to Director for demo
+    // Demo mode: skip login, sign in as Director, and lift every role/location
+    // restriction so the whole flow — production through dispatch — is
+    // reachable from one session.
+    loginDemo();
     await loadSapData();
     navigate('/dashboard');
   }
@@ -192,8 +195,11 @@ export function LoginPage() {
               onClick={handleDemoAccess}
               className="mt-6 w-full rounded-lg border border-emerald-800 bg-emerald-950/30 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50"
             >
-              ✨ Demo Mode (Skip Login)
+              ✨ Demo Mode (Skip Login — Full Access)
             </button>
+            <p className="mt-2 text-center text-xs text-slate-600">
+              Unlocks every feature, production through dispatch, with no role restrictions.
+            </p>
 
             <p className="mt-6 text-center text-xs text-slate-600">
               Enterprise-grade security with MFA authentication

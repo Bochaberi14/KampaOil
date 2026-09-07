@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { StatusPill } from '../components/StatusPill';
 import { can } from '../rbac';
+import { isDemoMode } from '../demoMode';
 import type { PickTask } from '../types/domain';
 import { STORAGE_ZONES, LOADING_BAY_ZONES } from '../data/seed';
 import { PRODUCTS } from '../data/products';
@@ -25,10 +26,10 @@ export function PickerTasksPage() {
   const getProductName = (sku: string) => PRODUCTS.find((p) => p.sku === sku)?.name ?? sku;
 
   const myAssignedTasks = pickTasks.filter(
-    (t) => t.status === 'Accepted' && t.assignedPickerId === currentUser?.id,
+    (t) => t.status === 'Accepted' && (isDemoMode() || t.assignedPickerId === currentUser?.id),
   );
   const myCompletedTasks = pickTasks.filter(
-    (t) => t.status === 'Completed' && t.assignedPickerId === currentUser?.id,
+    (t) => t.status === 'Completed' && (isDemoMode() || t.assignedPickerId === currentUser?.id),
   );
   const dispatchTasksCount = myAssignedTasks.filter((t) => t.origin === 'Dispatch').length;
   const selectedTask = pickTasks.find((t) => t.id === selectedTaskId) ?? null;

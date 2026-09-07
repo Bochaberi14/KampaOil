@@ -75,7 +75,8 @@ import {
 } from '../engine/ids';
 import { findRackHoldingPallet, selectFifoLoads } from '../engine/rules';
 import { recommendStorageLocation } from '../engine/storageRecommendation';
-import { can, getPickerType } from '../rbac';
+import { can, isPickerLocationMatch } from '../rbac';
+import { isDemoMode, setDemoMode } from '../demoMode';
 
 const RECALL_STAGE_ORDER: RecallStageName[] = ['Inspection', 'Repacking', 'Relabelling', 'QA'];
 
@@ -261,6 +262,9 @@ const err = <T>(error: string): Result<T> => ({ ok: false, error });
 interface WarehouseState {
   currentUser: User | null;
   login: (userId: string) => boolean;
+  // Skip-login shortcut: signs in as the Director and lifts every role/location
+  // restriction for the session, so one visitor can walk production → dispatch.
+  loginDemo: () => boolean;
   logout: () => void;
 
   // Scanner management
@@ -361,11 +365,6 @@ interface WarehouseState {
     pickTaskId: string;
     palletId: string;
     rackId: string;
-    operatorId: string;
-  }) => Result;
-  scanPalletLeavingStorage: (args: {
-    pickTaskId: string;
-    palletId: string;
     operatorId: string;
   }) => Result;
   scanBayRackForPick: (args: {
@@ -594,6 +593,7 @@ export const useWarehouseStore = create<WarehouseState>()(
     (set, get) => ({
       currentUser: null,
       login: (userId) => {
+        setDemoMode(false);
         const user = USERS.find((u) => u.id === userId);
         if (!user) {
           // Log failed login
@@ -646,7 +646,15 @@ export const useWarehouseStore = create<WarehouseState>()(
         });
         return true;
       },
-      logout: () => set({ currentUser: null }),
+      loginDemo: () => {
+        const ok = get().login('dir1');
+        setDemoMode(true);
+        return ok;
+      },
+      logout: () => {
+        setDemoMode(false);
+        set({ currentUser: null });
+      },
 
       updateScannerWorkLocation: (args) => {
         const { scannerId, newLocation, operatorId } = args;
@@ -776,7 +784,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
         }
-        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+        if (!isPickerLocationMatch(state.currentUser?.id, 'production')) {
           return err('❌ Only production pickers can scan lines');
         }
         const line = state.lines.find((l) => l.id === lineId);
@@ -793,7 +801,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
         }
-        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+        if (!isPickerLocationMatch(state.currentUser?.id, 'production')) {
           return err('❌ Only production pickers can scan products for production');
         }
         const line = state.lines.find((l) => l.id === lineId);
@@ -819,7 +827,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         if (!can(state.currentUser?.role, 'execute:scan')) {
           return err(`${state.currentUser?.role ?? 'This role'} cannot operate the scanner — requires Picker`);
         }
-        if (state.currentUser && getPickerType(state.currentUser.id) !== 'production') {
+        if (!isPickerLocationMatch(state.currentUser?.id, 'production')) {
           return err('❌ Only production pickers can scan pallets for production loading');
         }
         const pallet = state.pallets.find((p) => p.id === palletId);
@@ -1239,7 +1247,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const task = state.pickTasks.find((t) => t.id === pickTaskId);
         if (!task) return err(`Pick task "${pickTaskId}" not found`);
-        if (task.status !== 'Accepted' || task.assignedPickerId !== operatorId) {
+        if (task.status !== 'Accepted' || (task.assignedPickerId !== operatorId && !isDemoMode())) {
           return err(`Pick task ${pickTaskId} must be accepted by you before releasing pallets`);
         }
         const item = task.items.find((i) => i.palletId === palletId && !i.picked);
@@ -1315,50 +1323,6 @@ export const useWarehouseStore = create<WarehouseState>()(
         return ok(undefined);
       },
 
-      scanPalletLeavingStorage: ({ pickTaskId, palletId, operatorId }) => {
-        const state = get();
-        if (!can(state.currentUser?.role, 'execute:pickTask')) {
-          return err(`${state.currentUser?.role ?? 'This role'} cannot perform picks — requires Picker`);
-        }
-        const task = state.pickTasks.find((t) => t.id === pickTaskId);
-        if (!task) return err(`Pick task "${pickTaskId}" not found`);
-        if (task.assignedPickerId !== operatorId) {
-          return err(`Pick task ${pickTaskId} must be assigned to you`);
-        }
-        const item = task.items.find((i) => i.palletId === palletId);
-        if (!item) return err(`Pallet ${palletId} is not part of this pick task`);
-        const pallet = state.pallets.find((p) => p.id === palletId);
-        if (!pallet) return err(`Pallet ${palletId} not found`);
-        if (pallet.status !== 'Racked') {
-          return err(`Pallet ${palletId} must be in storage (Racked) to be released — current status: ${pallet.status}`);
-        }
-
-        const isDirectDispatch = task.directDispatch;
-        set((state) => ({
-          pallets: state.pallets.map((p) =>
-            p.id === palletId
-              ? { ...p, status: isDirectDispatch ? 'InTransitToTruck' : 'InTransitToBay' }
-              : p,
-          ),
-          movements: [
-            ...state.movements,
-            {
-              id: generateMovementId(),
-              palletId,
-              from: `Rack ${item.sourceRackId}`,
-              to: isDirectDispatch ? 'Dispatch (Direct)' : 'InTransit to Bay',
-              timestamp: new Date().toISOString(),
-              operatorId,
-            },
-          ],
-        }));
-        const message = isDirectDispatch
-          ? `Pallet ${palletId} released directly to dispatch — bypassing the loading bay`
-          : `Pallet ${palletId} released from storage — en route to bay`;
-        get().pushToast(message, 'success');
-        get().enqueueSapSync('PickMovement', `Pallet ${palletId} released from storage`);
-        return ok(undefined);
-      },
 
       scanBayRackForPick: ({ pickTaskId, palletId, bayRackId, operatorId }) => {
         const state = get();
@@ -1367,7 +1331,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const task = state.pickTasks.find((t) => t.id === pickTaskId);
         if (!task) return err(`Pick task "${pickTaskId}" not found`);
-        if (task.assignedPickerId !== operatorId) {
+        if (task.assignedPickerId !== operatorId && !isDemoMode()) {
           return err(`Pick task ${pickTaskId} must be accepted by you before confirming bay arrival`);
         }
         const item = task.items.find((i) => i.palletId === palletId);
@@ -1682,7 +1646,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const task = state.pickTasks.find((t) => t.id === pickTaskId);
         if (!task) return err(`Dispatch task "${pickTaskId}" not found`);
         if (task.origin !== 'Dispatch') return err(`Task ${pickTaskId} is not a dispatch picking task`);
-        if (task.assignedPickerId !== operatorId) {
+        if (task.assignedPickerId !== operatorId && !isDemoMode()) {
           return err(`Task ${pickTaskId} must be assigned to you`);
         }
 
@@ -3163,6 +3127,7 @@ export const useWarehouseStore = create<WarehouseState>()(
       },
 
       resetDemo: () => {
+        setDemoMode(false);
         set({ currentUser: null, toasts: [], ...seedState() });
       },
     }),
