@@ -59,14 +59,25 @@ export function DispatchPage() {
   // the bay portion alone is done, before a still-in-transit or just-arrived
   // direct-dispatch pallet is folded into that same manifest, permanently
   // missing it once the truck departs.
-  function pickingCompleteForTruck(truckId: string) {
+  // Returns why picking isn't complete yet, if it isn't — the picking-progress
+  // list's "Staged" label only means "arrived, not yet scanned out"; it does
+  // NOT mean "captured in the current manifest" (that only happens when
+  // Generate/Regenerate Documents is clicked on Dispatch Planning), so a
+  // plain true/false here reads as a mystery once every task shows "Staged"
+  // but the scan still fails.
+  function pickingIncompleteReason(truckId: string): string | null {
     const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
-    if (!tasksForTruck.every((t) => t.status === 'Completed')) return false;
+    const unfinishedTasks = tasksForTruck.filter((t) => t.status !== 'Completed');
+    if (unfinishedTasks.length > 0) {
+      return `${unfinishedTasks.length} assigned picking task(s) aren't finished yet — check the picking progress list.`;
+    }
 
     const verification = selectedSO
       ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
       : undefined;
-    if (!verification) return false;
+    if (!verification) {
+      return 'No dispatch documents have been generated for this vehicle yet — go to Dispatch Planning and click Generate Documents first.';
+    }
 
     // Checked by the pallet's own status, not membership in THIS truck's
     // palletIds — an old approval/task from an earlier, already-departed
@@ -91,15 +102,19 @@ export function DispatchPage() {
     const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
       t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
     );
-    if (!storageDirectArrived) return false;
-
     const relevantApprovals = productionApprovals.filter((a) => skus.has(a.sku));
-    return relevantApprovals.every((a) => {
+    const productionDirectCaptured = relevantApprovals.every((a) => {
       if ((a.palletsRemaining ?? 0) > 0) return false;
       const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
       return taggedPallets.every((p) => p.status === 'StagedForDispatch');
     });
+    if (!storageDirectArrived || !productionDirectCaptured) {
+      return 'A direct-dispatch pallet arrived after documents were last generated, so it isn\'t captured in the manifest yet — go to Dispatch Planning and click Regenerate Documents, then come back and scan the line.';
+    }
+
+    return null;
   }
+
   // Whether a specific truck's dispatch line has already been scanned — used
   // per pick task / per production-direct batch below, since each can be
   // routed to a different one of the order's active trucks.
@@ -152,11 +167,9 @@ export function DispatchPage() {
       );
       return;
     }
-    if (!pickingCompleteForTruck(truck.id)) {
-      pushToast(
-        `Picking for ${truck.dispatchLine} is not complete yet — every assigned task, and any direct-dispatch pallet still in transit, must be done and captured in the manifest first.`,
-        'error',
-      );
+    const incompleteReason = pickingIncompleteReason(truck.id);
+    if (incompleteReason) {
+      pushToast(`Picking for ${truck.dispatchLine} is not complete yet — ${incompleteReason}`, 'error');
       return;
     }
 
@@ -338,14 +351,17 @@ export function DispatchPage() {
           {selectedSO && can(currentUser?.role, 'execute:scan') && activeTrucks.length > 0 && (
             <div className="space-y-3">
               <ul className="space-y-1 text-xs text-slate-400">
-                {activeTrucks.map((t) => (
-                  <li key={t.id} className="flex items-center justify-between">
-                    <span>{t.dispatchLine} ({t.plate})</span>
-                    <span className={pickingCompleteForTruck(t.id) ? 'text-emerald-400' : 'text-amber-400'}>
-                      {pickingCompleteForTruck(t.id) ? 'Ready to scan' : 'Picking in progress'}
-                    </span>
-                  </li>
-                ))}
+                {activeTrucks.map((t) => {
+                  const reason = pickingIncompleteReason(t.id);
+                  return (
+                    <li key={t.id} className="flex items-center justify-between gap-3">
+                      <span>{t.dispatchLine} ({t.plate})</span>
+                      <span className={reason ? 'text-right text-amber-400' : 'text-emerald-400'}>
+                        {reason ?? 'Ready to scan'}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
               <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
                 <span className={`rounded-full px-2 py-1 ${dispatchLineScanned ? 'bg-emerald-500/15 text-emerald-300' : 'bg-indigo-500/15 text-indigo-300'}`}>
