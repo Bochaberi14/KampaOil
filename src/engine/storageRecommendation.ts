@@ -14,7 +14,7 @@ const SLOTS_PER_RACK = 6;
 export function recommendStorageLocation(
   racks: Rack[],
   sku: string,
-  _palletId: string,
+  palletId: string,
   pallets?: Pallet[],
 ): StorageRecommendation | null {
   // Map SKU to bin ID (Product-specific bins)
@@ -36,9 +36,13 @@ export function recommendStorageLocation(
     const rackedCount = rack.slots.filter((s) => s.palletId).length;
 
     // Count in-transit pallets assigned to this rack (only InTransitToStorage, not Loaded which are still at production)
+    // Excludes the pallet being recommended right now — otherwise its own
+    // earlier reservation double-counts against itself when this function is
+    // called again to recompute a fresh recommendation for that same pallet.
     const inTransitCount = pallets
       ? pallets.filter(
           (p) =>
+            p.id !== palletId &&
             p.status === 'InTransitToStorage' &&
             p.recommendedStorageLocation &&
             p.recommendedStorageLocation.rackId === rack.id,
@@ -66,6 +70,7 @@ export function recommendStorageLocation(
     const inTransitCount = pallets
       ? pallets.filter(
           (p) =>
+            p.id !== palletId &&
             p.status === 'InTransitToStorage' &&
             p.recommendedStorageLocation &&
             p.recommendedStorageLocation.rackId === rack.id,
@@ -117,7 +122,7 @@ const skuToBayZone: Record<string, string> = {
 export function recommendBayLocation(
   bayRacks: Rack[],
   sku: string,
-  _palletId: string,
+  palletId: string,
   pallets?: Pallet[],
 ): { rackId: string } | null {
   const SLOTS_PER_BAY_RACK = 6;
@@ -129,10 +134,12 @@ export function recommendBayLocation(
   const availableRack = zoneRacks.find((rack) => {
     const rackedCount = rack.slots.filter((s) => s.palletId).length;
 
-    // Count in-transit pallets assigned to this rack
+    // Count in-transit pallets assigned to this rack. Excludes the pallet
+    // being recommended right now — see recommendStorageLocation for why.
     const inTransitCount = pallets
       ? pallets.filter(
           (p) =>
+            p.id !== palletId &&
             p.status === 'InTransitToBay' &&
             p.recommendedBayLocation &&
             p.recommendedBayLocation.rackId === rack.id,

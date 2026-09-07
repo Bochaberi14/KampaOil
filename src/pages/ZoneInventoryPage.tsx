@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { LOADING_BAY_ZONES, STORAGE_ZONES } from '../data/seed';
 import { RackGrid } from '../components/RackGrid';
 import { PrintSheet } from '../components/PrintSheet';
-import { InventoryReportPrint } from '../components/InventoryReportPrint';
+import { InventoryReportPrint, BayInventoryReportPrint } from '../components/InventoryReportPrint';
 import { can } from '../rbac';
 import type { Zone, Load } from '../types/domain';
 
@@ -97,7 +98,24 @@ export function ZoneInventoryPage() {
         <h2 className="text-lg font-semibold text-slate-100">Storage Zones</h2>
         <div className="grid grid-cols-1 gap-4">
           {storageStats.map((stat) => (
-            <ZoneCard key={stat.zone.id} stat={stat} loads={loads} />
+            <ZoneCard
+              key={stat.zone.id}
+              stat={stat}
+              loads={loads}
+              printAction={
+                canPrintInventory ? (
+                  <PrintSheet title={`${stat.zone.name} Inventory Report`} triggerLabel="🖨️ Print zone">
+                    <BayInventoryReportPrint
+                      zone={stat.zone}
+                      shelves={storageShelves}
+                      racks={racks}
+                      loads={loads}
+                      generatedAt={new Date().toISOString()}
+                    />
+                  </PrintSheet>
+                ) : undefined
+              }
+            />
           ))}
         </div>
       </div>
@@ -107,7 +125,24 @@ export function ZoneInventoryPage() {
         <h2 className="text-lg font-semibold text-slate-100">Loading Bay Zones</h2>
         <div className="grid grid-cols-1 gap-4">
           {loadingBayStats.map((stat) => (
-            <ZoneCard key={stat.zone.id} stat={stat} loads={loads} />
+            <ZoneCard
+              key={stat.zone.id}
+              stat={stat}
+              loads={loads}
+              printAction={
+                canPrintInventory ? (
+                  <PrintSheet title={`${stat.zone.name} Inventory Report`} triggerLabel="🖨️ Print zone">
+                    <BayInventoryReportPrint
+                      zone={stat.zone}
+                      shelves={loadingBayShelves}
+                      racks={bayRacks}
+                      loads={loads}
+                      generatedAt={new Date().toISOString()}
+                    />
+                  </PrintSheet>
+                ) : undefined
+              }
+            />
           ))}
         </div>
       </div>
@@ -128,9 +163,11 @@ interface ZoneStats {
 function ZoneCard({
   stat,
   loads,
+  printAction,
 }: {
   stat: ZoneStats;
   loads?: Load[];
+  printAction?: ReactNode;
 }) {
   const typedStat = stat;
   const utilizationColor =
@@ -151,9 +188,12 @@ function ZoneCard({
             <h3 className="font-semibold text-slate-200">{typedStat.zone.name}</h3>
             <p className="text-xs text-slate-500">{typedStat.zone.id}</p>
           </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold text-slate-100">{typedStat.utilizationPercent}%</div>
-            <p className="text-xs text-slate-500">Utilization</p>
+          <div className="flex items-start gap-3">
+            {printAction}
+            <div className="text-right">
+              <div className="text-2xl font-bold text-slate-100">{typedStat.utilizationPercent}%</div>
+              <p className="text-xs text-slate-500">Utilization</p>
+            </div>
           </div>
         </div>
 

@@ -37,6 +37,30 @@ export function InventoryReportPrint({
   );
 }
 
+interface BayInventoryReportPrintProps {
+  zone: Zone;
+  shelves: Shelf[];
+  racks: Rack[];
+  loads: Load[];
+  generatedAt: string;
+}
+
+export function BayInventoryReportPrint({ zone, shelves, racks, loads, generatedAt }: BayInventoryReportPrintProps) {
+  return (
+    <div className="space-y-8 bg-white p-12 text-black">
+      <div className="border-b-2 border-black pb-4">
+        <h1 className="text-2xl font-bold">LOADING BAY INVENTORY REPORT</h1>
+        <p className="text-sm text-gray-600">
+          Physical verification checklist — {zone.name} ({zone.id})
+        </p>
+        <p className="text-xs text-gray-500 mt-1">Generated {new Date(generatedAt).toLocaleString()}</p>
+      </div>
+
+      <ReportSection title={zone.name} zones={[zone]} shelves={shelves} racks={racks} loads={loads} />
+    </div>
+  );
+}
+
 function ReportSection({
   title,
   zones,
@@ -57,7 +81,7 @@ function ReportSection({
         {zones.map((zone) => {
           const zoneShelves = shelves.filter((s) => s.zoneId === zone.id);
           return (
-            <div key={zone.id} style={{ breakInside: 'avoid' }}>
+            <div key={zone.id}>
               <h3 className="font-semibold mb-2">
                 {zone.name} <span className="text-xs font-mono text-gray-500">({zone.id})</span>
                 {zone.requiresRefrigeration && <span className="text-xs text-gray-600"> — Refrigerated</span>}
@@ -66,7 +90,7 @@ function ReportSection({
                 const shelfRacks = racks.filter((r) => r.shelfId === shelf.id);
                 if (shelfRacks.length === 0) return null;
                 return (
-                  <div key={shelf.id} className="ml-4 mb-3">
+                  <div key={shelf.id} className="ml-4 mb-3" style={{ breakInside: 'avoid' }}>
                     <p className="text-xs font-semibold uppercase text-gray-600 mb-1">Shelf {shelf.index}</p>
                     <table className="w-full text-xs border-collapse">
                       <thead>
