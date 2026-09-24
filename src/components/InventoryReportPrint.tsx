@@ -61,6 +61,90 @@ export function BayInventoryReportPrint({ zone, shelves, racks, loads, generated
   );
 }
 
+interface ShelfInventoryReportPrintProps {
+  zone: Zone;
+  shelf: Shelf;
+  racks: Rack[];
+  loads: Load[];
+  generatedAt: string;
+}
+
+export function ShelfInventoryReportPrint({ zone, shelf, racks, loads, generatedAt }: ShelfInventoryReportPrintProps) {
+  const shelfRacks = racks.filter((r) => r.shelfId === shelf.id);
+  return (
+    <div className="space-y-8 bg-white p-12 text-black">
+      <div className="border-b-2 border-black pb-4">
+        <h1 className="text-2xl font-bold">SHELF INVENTORY REPORT</h1>
+        <p className="text-sm text-gray-600">
+          Physical verification checklist — {zone.name} ({zone.id}) · Shelf {shelf.index}
+        </p>
+        <p className="text-xs text-gray-500 mt-1">Generated {new Date(generatedAt).toLocaleString()}</p>
+      </div>
+
+      <RackTable racks={shelfRacks} loads={loads} />
+    </div>
+  );
+}
+
+interface RackInventoryReportPrintProps {
+  zone: Zone;
+  rack: Rack;
+  loads: Load[];
+  generatedAt: string;
+}
+
+export function RackInventoryReportPrint({ zone, rack, loads, generatedAt }: RackInventoryReportPrintProps) {
+  return (
+    <div className="space-y-8 bg-white p-12 text-black">
+      <div className="border-b-2 border-black pb-4">
+        <h1 className="text-2xl font-bold">RACK INVENTORY REPORT</h1>
+        <p className="text-sm text-gray-600">
+          Physical verification checklist — {zone.name} ({zone.id}) · Rack {rack.name}
+        </p>
+        <p className="text-xs text-gray-500 mt-1">Generated {new Date(generatedAt).toLocaleString()}</p>
+      </div>
+
+      <RackTable racks={[rack]} loads={loads} />
+    </div>
+  );
+}
+
+function RackTable({ racks, loads }: { racks: Rack[]; loads: Load[] }) {
+  return (
+    <table className="w-full text-xs border-collapse">
+      <thead>
+        <tr className="border-b border-black text-left">
+          <th className="py-1 pr-2">Rack</th>
+          <th className="py-1 pr-2">Slot</th>
+          <th className="py-1 pr-2">Pallet</th>
+          <th className="py-1 pr-2">Product</th>
+          <th className="py-1 pr-2">Qty</th>
+          <th className="py-1">Verified</th>
+        </tr>
+      </thead>
+      <tbody>
+        {racks.flatMap((rack) =>
+          rack.slots.map((slot) => {
+            const load = slot.palletId ? loads.find((l) => l.palletId === slot.palletId) : undefined;
+            return (
+              <tr key={`${rack.id}-${slot.index}`} className="border-b border-gray-300">
+                <td className="py-1 pr-2 font-mono">{rack.id}</td>
+                <td className="py-1 pr-2">{slot.index}</td>
+                <td className="py-1 pr-2 font-mono">{slot.palletId ?? '— empty —'}</td>
+                <td className="py-1 pr-2">{load ? `${load.productName} (${load.sku})` : '—'}</td>
+                <td className="py-1 pr-2">{load ? load.quantity.toLocaleString() : '—'}</td>
+                <td className="py-1">
+                  <span className="inline-block h-3 w-3 border border-black" />
+                </td>
+              </tr>
+            );
+          }),
+        )}
+      </tbody>
+    </table>
+  );
+}
+
 function ReportSection({
   title,
   zones,
@@ -92,39 +176,7 @@ function ReportSection({
                 return (
                   <div key={shelf.id} className="ml-4 mb-3" style={{ breakInside: 'avoid' }}>
                     <p className="text-xs font-semibold uppercase text-gray-600 mb-1">Shelf {shelf.index}</p>
-                    <table className="w-full text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-black text-left">
-                          <th className="py-1 pr-2">Rack</th>
-                          <th className="py-1 pr-2">Slot</th>
-                          <th className="py-1 pr-2">Pallet</th>
-                          <th className="py-1 pr-2">Product</th>
-                          <th className="py-1 pr-2">Qty</th>
-                          <th className="py-1">Verified</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {shelfRacks.flatMap((rack) =>
-                          rack.slots.map((slot) => {
-                            const load = slot.palletId ? loads.find((l) => l.palletId === slot.palletId) : undefined;
-                            return (
-                              <tr key={`${rack.id}-${slot.index}`} className="border-b border-gray-300">
-                                <td className="py-1 pr-2 font-mono">{rack.id}</td>
-                                <td className="py-1 pr-2">{slot.index}</td>
-                                <td className="py-1 pr-2 font-mono">{slot.palletId ?? '— empty —'}</td>
-                                <td className="py-1 pr-2">
-                                  {load ? `${load.productName} (${load.sku})` : '—'}
-                                </td>
-                                <td className="py-1 pr-2">{load ? load.quantity.toLocaleString() : '—'}</td>
-                                <td className="py-1">
-                                  <span className="inline-block h-3 w-3 border border-black" />
-                                </td>
-                              </tr>
-                            );
-                          }),
-                        )}
-                      </tbody>
-                    </table>
+                    <RackTable racks={shelfRacks} loads={loads} />
                   </div>
                 );
               })}

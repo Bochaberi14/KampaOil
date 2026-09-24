@@ -1,11 +1,15 @@
-import type { ReactNode } from 'react';
 import { useWarehouseStore } from '../store/useWarehouseStore';
 import { LOADING_BAY_ZONES, STORAGE_ZONES } from '../data/seed';
 import { RackGrid } from '../components/RackGrid';
 import { PrintSheet } from '../components/PrintSheet';
-import { InventoryReportPrint, BayInventoryReportPrint } from '../components/InventoryReportPrint';
+import {
+  InventoryReportPrint,
+  BayInventoryReportPrint,
+  ShelfInventoryReportPrint,
+  RackInventoryReportPrint,
+} from '../components/InventoryReportPrint';
 import { can } from '../rbac';
-import type { Zone, Load } from '../types/domain';
+import type { Zone, Load, Shelf, Rack } from '../types/domain';
 
 export function ZoneInventoryPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
@@ -19,7 +23,9 @@ export function ZoneInventoryPage() {
 
   function getZoneStats(zone: Zone) {
     const zoneRacks = zone.warehouseType === 'Storage' ? racks : bayRacks;
+    const zoneShelves = zone.warehouseType === 'Storage' ? storageShelves : loadingBayShelves;
     const relevantRacks = zoneRacks.filter((r) => r.zoneId === zone.id);
+    const relevantShelves = zoneShelves.filter((s) => s.zoneId === zone.id);
 
     let totalSlots = 0;
     let occupiedSlots = 0;
@@ -62,6 +68,7 @@ export function ZoneInventoryPage() {
       palletCount: palletIds.size,
       loads: zoneLoads,
       racks: relevantRacks,
+      shelves: relevantShelves,
     };
   }
 
@@ -98,24 +105,7 @@ export function ZoneInventoryPage() {
         <h2 className="text-lg font-semibold text-slate-100">Storage Zones</h2>
         <div className="grid grid-cols-1 gap-4">
           {storageStats.map((stat) => (
-            <ZoneCard
-              key={stat.zone.id}
-              stat={stat}
-              loads={loads}
-              printAction={
-                canPrintInventory ? (
-                  <PrintSheet title={`${stat.zone.name} Inventory Report`} triggerLabel="🖨️ Print zone">
-                    <BayInventoryReportPrint
-                      zone={stat.zone}
-                      shelves={storageShelves}
-                      racks={racks}
-                      loads={loads}
-                      generatedAt={new Date().toISOString()}
-                    />
-                  </PrintSheet>
-                ) : undefined
-              }
-            />
+            <ZoneCard key={stat.zone.id} stat={stat} loads={loads} canPrint={canPrintInventory} />
           ))}
         </div>
       </div>
@@ -125,24 +115,7 @@ export function ZoneInventoryPage() {
         <h2 className="text-lg font-semibold text-slate-100">Loading Bay Zones</h2>
         <div className="grid grid-cols-1 gap-4">
           {loadingBayStats.map((stat) => (
-            <ZoneCard
-              key={stat.zone.id}
-              stat={stat}
-              loads={loads}
-              printAction={
-                canPrintInventory ? (
-                  <PrintSheet title={`${stat.zone.name} Inventory Report`} triggerLabel="🖨️ Print zone">
-                    <BayInventoryReportPrint
-                      zone={stat.zone}
-                      shelves={loadingBayShelves}
-                      racks={bayRacks}
-                      loads={loads}
-                      generatedAt={new Date().toISOString()}
-                    />
-                  </PrintSheet>
-                ) : undefined
-              }
-            />
+            <ZoneCard key={stat.zone.id} stat={stat} loads={loads} canPrint={canPrintInventory} />
           ))}
         </div>
       </div>
@@ -157,17 +130,18 @@ interface ZoneStats {
   utilizationPercent: number;
   palletCount: number;
   loads: Array<{ sku: string; productName: string; quantity: number; units: number }>;
-  racks: any[];
+  racks: Rack[];
+  shelves: Shelf[];
 }
 
 function ZoneCard({
   stat,
   loads,
-  printAction,
+  canPrint,
 }: {
   stat: ZoneStats;
   loads?: Load[];
-  printAction?: ReactNode;
+  canPrint?: boolean;
 }) {
   const typedStat = stat;
   const utilizationColor =
@@ -189,7 +163,17 @@ function ZoneCard({
             <p className="text-xs text-slate-500">{typedStat.zone.id}</p>
           </div>
           <div className="flex items-start gap-3">
-            {printAction}
+            {canPrint && (
+              <PrintSheet title={`${typedStat.zone.name} Inventory Report`} triggerLabel="🖨️ Print bay">
+                <BayInventoryReportPrint
+                  zone={typedStat.zone}
+                  shelves={typedStat.shelves}
+                  racks={typedStat.racks}
+                  loads={loads ?? []}
+                  generatedAt={new Date().toISOString()}
+                />
+              </PrintSheet>
+            )}
             <div className="text-right">
               <div className="text-2xl font-bold text-slate-100">{typedStat.utilizationPercent}%</div>
               <p className="text-xs text-slate-500">Utilization</p>
@@ -250,17 +234,50 @@ function ZoneCard({
         <p className="text-xs text-slate-500 italic">Zone is empty</p>
       )}
 
-      {/* Racks Display */}
+      {/* Racks Display, grouped by shelf */}
       {typedStat.racks.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-            Racks
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {typedStat.racks.map((rack: any) => (
-              <RackGrid key={rack.id} rack={rack} loads={loads} />
-            ))}
-          </div>
+        <div className="space-y-4">
+          {typedStat.shelves.map((shelf) => {
+            const shelfRacks = typedStat.racks.filter((r) => r.shelfId === shelf.id);
+            if (shelfRacks.length === 0) return null;
+            return (
+              <div key={shelf.id}>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Shelf {shelf.index}
+                  </p>
+                  {canPrint && (
+                    <PrintSheet title={`${typedStat.zone.name} · Shelf ${shelf.index} Inventory Report`} triggerLabel="🖨️ Print shelf">
+                      <ShelfInventoryReportPrint
+                        zone={typedStat.zone}
+                        shelf={shelf}
+                        racks={shelfRacks}
+                        loads={loads ?? []}
+                        generatedAt={new Date().toISOString()}
+                      />
+                    </PrintSheet>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {shelfRacks.map((rack) => (
+                    <div key={rack.id} className="space-y-2">
+                      <RackGrid rack={rack} loads={loads} />
+                      {canPrint && (
+                        <PrintSheet title={`Rack ${rack.name} Inventory Report`} triggerLabel="🖨️ Print rack">
+                          <RackInventoryReportPrint
+                            zone={typedStat.zone}
+                            rack={rack}
+                            loads={loads ?? []}
+                            generatedAt={new Date().toISOString()}
+                          />
+                        </PrintSheet>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

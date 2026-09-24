@@ -496,6 +496,13 @@ export interface DispatchVerification {
   // not by pallet movement. Lets the default printed manifest show just the
   // latest release batch instead of everything ever released for the order.
   latestReleaseProducts: DispatchVerificationProduct[];
+  // Cumulative units per SKU already credited to SalesOrderLine.dispatchedQty
+  // via scanDispatchLine — lets a picker who finishes their own task on this
+  // truck scan and credit just that ready portion, without waiting on other
+  // pickers assigned to the same truck, and without a later scan (partial or
+  // the closing one) ever double-crediting units a previous scan already
+  // covered. Keyed by sku; absent/0 means nothing credited yet.
+  creditedQtyBySku: Record<string, number>;
   loaderUserId: string | null;
   pickerUserIds: string[];
   stagedAt: string;

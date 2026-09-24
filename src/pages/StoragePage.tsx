@@ -68,6 +68,29 @@ export function StoragePage() {
       return;
     }
 
+    // Safety net for a mistaken storage scan: this pallet was already routed
+    // for direct dispatch (from Production, or via an approved Storage
+    // shortfall) and must never be racked. Redirect the picker back to
+    // dispatch instead of racking it or showing a raw status error — this is
+    // the one case a pallet can bypass storage; normal pallets never reach
+    // 'InTransitToTruck' so they always fall through to the line below.
+    if (pallet.status === 'InTransitToTruck') {
+      setWizard({ step: 'pallet-arriving', palletId: null });
+      if (pallet.directDispatchArrivedAt) {
+        pushToast(
+          `⚡ Pallet ${palletId} is a direct-dispatch pallet already confirmed at the loading bay — do not rack it, take it straight to dispatch`,
+          'error',
+        );
+      } else {
+        pushToast(
+          `⚡ Pallet ${palletId} is a direct-dispatch pallet — do not rack it, take it to the loading bay and scan its arrival there`,
+          'error',
+        );
+        setLastArrivedDirectDispatch(palletId);
+      }
+      return;
+    }
+
     const result = scanPalletLeavingLine(palletId, currentUser.id);
     if (!result.ok) {
       pushToast(result.error, 'error');

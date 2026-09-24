@@ -59,24 +59,23 @@ export function DispatchPage() {
   // the bay portion alone is done, before a still-in-transit or just-arrived
   // direct-dispatch pallet is folded into that same manifest, permanently
   // missing it once the truck departs.
-  // Returns why picking isn't complete yet, if it isn't — the picking-progress
-  // list's "Staged" label only means "arrived, not yet scanned out"; it does
-  // NOT mean "captured in the current manifest" (that only happens when
-  // Generate/Regenerate Documents is clicked on Dispatch Planning), so a
-  // plain true/false here reads as a mystery once every task shows "Staged"
-  // but the scan still fails.
+  // Purely informational now — scanning is never blocked on this (see
+  // scanDispatchLine in the store): a picker can always scan to bank
+  // whatever's already arrived for this truck, even while other tasks
+  // assigned to the same vehicle are still in progress. This just explains
+  // why the picking-progress list might not show "Completed" everywhere yet.
   function pickingIncompleteReason(truckId: string): string | null {
     const tasksForTruck = soPickTasks.filter((t) => t.truckId === truckId);
     const unfinishedTasks = tasksForTruck.filter((t) => t.status !== 'Completed');
     if (unfinishedTasks.length > 0) {
-      return `${unfinishedTasks.length} assigned picking task(s) aren't finished yet — check the picking progress list.`;
+      return `${unfinishedTasks.length} assigned picking task(s) still in progress — scan now to bank whatever's already arrived.`;
     }
 
     const verification = selectedSO
       ? dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
       : undefined;
     if (!verification) {
-      return 'No dispatch documents have been generated for this vehicle yet — go to Dispatch Planning and click Generate Documents first.';
+      return 'Nothing has reached the bay or dispatch area for this vehicle yet.';
     }
 
     // Checked by the pallet's own status, not membership in THIS truck's
@@ -109,7 +108,7 @@ export function DispatchPage() {
       return taggedPallets.every((p) => p.status === 'StagedForDispatch');
     });
     if (!storageDirectArrived || !productionDirectCaptured) {
-      return 'A direct-dispatch pallet arrived after documents were last generated, so it isn\'t captured in the manifest yet — go to Dispatch Planning and click Regenerate Documents, then come back and scan the line.';
+      return "A direct-dispatch pallet for this vehicle hasn't arrived yet — scan now to bank what's already here, then scan again once it does.";
     }
 
     return null;
@@ -167,12 +166,6 @@ export function DispatchPage() {
       );
       return;
     }
-    const incompleteReason = pickingIncompleteReason(truck.id);
-    if (incompleteReason) {
-      pushToast(`Picking for ${truck.dispatchLine} is not complete yet — ${incompleteReason}`, 'error');
-      return;
-    }
-
     setScannedTruckId(truck.id);
     pushToast(`✓ Dispatch line confirmed — now scan vehicle barcode`, 'success');
     setDispatchLineScanned(true);
@@ -202,7 +195,15 @@ export function DispatchPage() {
       return;
     }
 
-    pushToast(`✓ Dispatch verified! Order complete.`, 'success');
+    // A picker whose own task is done can bank just that portion and move on
+    // — the truck only actually closes out once every task/approval routed
+    // to it has arrived (see scanDispatchLine's `closed` flag).
+    pushToast(
+      result.data.closed
+        ? `✓ Dispatch verified! ${truck.dispatchLine} released.`
+        : `✓ ${result.data.creditedQty.toLocaleString()} units confirmed at ${truck.dispatchLine} — more picking still pending for this vehicle.`,
+      'success',
+    );
     setDispatchLineScanned(false);
     setScannedTruckId(null);
   }
