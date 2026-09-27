@@ -1,4 +1,5 @@
 import type { Zone, Shelf, Rack, Load } from '../types/domain';
+import { binLabelForZoneId } from '../data/seed';
 
 interface InventoryReportPrintProps {
   storageZones: Zone[];
@@ -109,7 +110,55 @@ export function RackInventoryReportPrint({ zone, rack, loads, generatedAt }: Rac
   );
 }
 
-function RackTable({ racks, loads }: { racks: Rack[]; loads: Load[] }) {
+interface CustomInventoryReportPrintProps {
+  zones: Zone[];
+  shelves: Shelf[];
+  racks: Rack[];
+  loads: Load[];
+  generatedAt: string;
+  label?: string;
+}
+
+export function CustomInventoryReportPrint({
+  zones,
+  shelves,
+  racks,
+  loads,
+  generatedAt,
+  label,
+}: CustomInventoryReportPrintProps) {
+  const storageZones = zones.filter((z) => z.warehouseType === 'Storage');
+  const bayZones = zones.filter((z) => z.warehouseType === 'LoadingBay');
+
+  return (
+    <div className="space-y-8 bg-white p-12 text-black">
+      <div className="border-b-2 border-black pb-4">
+        <h1 className="text-2xl font-bold">CUSTOM INVENTORY REPORT</h1>
+        <p className="text-sm text-gray-600">
+          Physical verification checklist{label ? ` — ${label}` : ''}
+        </p>
+        <p className="text-xs text-gray-500 mt-1">Generated {new Date(generatedAt).toLocaleString()}</p>
+      </div>
+
+      {storageZones.length > 0 && (
+        <ReportSection title="Storage" zones={storageZones} shelves={shelves} racks={racks} loads={loads} useBinLabels />
+      )}
+      {bayZones.length > 0 && (
+        <ReportSection title="Loading Bay" zones={bayZones} shelves={shelves} racks={racks} loads={loads} useBinLabels />
+      )}
+    </div>
+  );
+}
+
+function RackTable({
+  racks,
+  loads,
+  useBinLabels,
+}: {
+  racks: Rack[];
+  loads: Load[];
+  useBinLabels?: boolean;
+}) {
   return (
     <table className="w-full text-xs border-collapse">
       <thead>
@@ -117,7 +166,7 @@ function RackTable({ racks, loads }: { racks: Rack[]; loads: Load[] }) {
           <th className="py-1 pr-2">Rack</th>
           <th className="py-1 pr-2">Slot</th>
           <th className="py-1 pr-2">Pallet</th>
-          <th className="py-1 pr-2">Product</th>
+          <th className="py-1 pr-2">{useBinLabels ? 'Bin' : 'Product'}</th>
           <th className="py-1 pr-2">Qty</th>
           <th className="py-1">Verified</th>
         </tr>
@@ -131,7 +180,13 @@ function RackTable({ racks, loads }: { racks: Rack[]; loads: Load[] }) {
                 <td className="py-1 pr-2 font-mono">{rack.id}</td>
                 <td className="py-1 pr-2">{slot.index}</td>
                 <td className="py-1 pr-2 font-mono">{slot.palletId ?? '— empty —'}</td>
-                <td className="py-1 pr-2">{load ? `${load.productName} (${load.sku})` : '—'}</td>
+                <td className="py-1 pr-2">
+                  {useBinLabels
+                    ? binLabelForZoneId(rack.zoneId)
+                    : load
+                      ? `${load.productName} (${load.sku})`
+                      : '—'}
+                </td>
                 <td className="py-1 pr-2">{load ? load.quantity.toLocaleString() : '—'}</td>
                 <td className="py-1">
                   <span className="inline-block h-3 w-3 border border-black" />
@@ -151,12 +206,14 @@ function ReportSection({
   shelves,
   racks,
   loads,
+  useBinLabels,
 }: {
   title: string;
   zones: Zone[];
   shelves: Shelf[];
   racks: Rack[];
   loads: Load[];
+  useBinLabels?: boolean;
 }) {
   return (
     <div>
@@ -167,7 +224,8 @@ function ReportSection({
           return (
             <div key={zone.id}>
               <h3 className="font-semibold mb-2">
-                {zone.name} <span className="text-xs font-mono text-gray-500">({zone.id})</span>
+                {useBinLabels ? binLabelForZoneId(zone.id) : zone.name}{' '}
+                <span className="text-xs font-mono text-gray-500">({zone.id})</span>
                 {zone.requiresRefrigeration && <span className="text-xs text-gray-600"> — Refrigerated</span>}
               </h3>
               {zoneShelves.map((shelf) => {
@@ -176,7 +234,7 @@ function ReportSection({
                 return (
                   <div key={shelf.id} className="ml-4 mb-3" style={{ breakInside: 'avoid' }}>
                     <p className="text-xs font-semibold uppercase text-gray-600 mb-1">Shelf {shelf.index}</p>
-                    <RackTable racks={shelfRacks} loads={loads} />
+                    <RackTable racks={shelfRacks} loads={loads} useBinLabels={useBinLabels} />
                   </div>
                 );
               })}

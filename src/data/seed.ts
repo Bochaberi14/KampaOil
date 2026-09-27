@@ -28,6 +28,21 @@ export const PALLET_CAPACITY = 100;
 // Loading Bay: BIN-A, BIN-B, BIN-C (products) + BIN-D (returns)
 // Each bin: 2 shelves, 3 racks per shelf
 
+// Zone/rack ids follow the BIN-{Letter}[-BAY][-...] convention (see comment
+// above) — this pulls the bin letter back out for display on custom print
+// sheets, so "Rina 1L" (BIN-A) prints as "Bin A" instead of the product name.
+// Zones outside that convention (e.g. OVERFLOW) fall back to their own id,
+// humanized (e.g. "Overflow"), rather than a placeholder.
+export function binLabelForZoneId(zoneId: string | undefined): string {
+  if (!zoneId) return 'Bin ?';
+  const match = zoneId.match(/^BIN-([A-Z])/);
+  if (match) return `Bin ${match[1]}`;
+  return zoneId
+    .split('-')
+    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
 const createZone = (
   id: string,
   name: ZoneName,

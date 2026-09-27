@@ -2,6 +2,7 @@ import { useWarehouseStore } from '../store/useWarehouseStore';
 import { LOADING_BAY_ZONES, STORAGE_ZONES } from '../data/seed';
 import { RackGrid } from '../components/RackGrid';
 import { PrintSheet } from '../components/PrintSheet';
+import { CustomPrintMenu } from '../components/CustomPrintMenu';
 import {
   InventoryReportPrint,
   BayInventoryReportPrint,
@@ -85,18 +86,28 @@ export function ZoneInventoryPage() {
           </p>
         </div>
         {canPrintInventory && (
-          <PrintSheet title="Warehouse Inventory Report" triggerLabel="🖨️ Print inventory report">
-            <InventoryReportPrint
-              storageZones={STORAGE_ZONES}
-              storageShelves={storageShelves}
-              storageRacks={racks}
-              bayZones={LOADING_BAY_ZONES}
-              bayShelves={loadingBayShelves}
-              bayRacks={bayRacks}
+          <div className="flex items-start gap-2">
+            <CustomPrintMenu
+              zoneData={[...storageStats, ...loadingBayStats].map((stat) => ({
+                zone: stat.zone,
+                shelves: stat.shelves,
+                racks: stat.racks,
+              }))}
               loads={loads}
-              generatedAt={new Date().toISOString()}
             />
-          </PrintSheet>
+            <PrintSheet title="Warehouse Inventory Report" triggerLabel="🖨️ Print inventory report">
+              <InventoryReportPrint
+                storageZones={STORAGE_ZONES}
+                storageShelves={storageShelves}
+                storageRacks={racks}
+                bayZones={LOADING_BAY_ZONES}
+                bayShelves={loadingBayShelves}
+                bayRacks={bayRacks}
+                loads={loads}
+                generatedAt={new Date().toISOString()}
+              />
+            </PrintSheet>
+          </div>
         )}
       </div>
 
