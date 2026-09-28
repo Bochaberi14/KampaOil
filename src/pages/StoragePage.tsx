@@ -8,6 +8,7 @@ import { STORAGE_ZONES } from '../data/seed';
 import { canAccessDepartment, isPickerLocationMatch } from '../rbac';
 import { isDemoMode } from '../demoMode';
 import { findCurrentLoadForPallet } from '../types/domain';
+import { PRODUCTS } from '../data/products';
 
 type WizardStep = 'pallet-arriving' | 'rack-placement';
 type PickingStep = 'pallet-at-rack' | 'rack-scan';
@@ -20,6 +21,7 @@ export function StoragePage() {
   const scanPalletLeavingLine = useWarehouseStore((s) => s.scanPalletLeavingLine);
   const scanPalletToRack = useWarehouseStore((s) => s.scanPalletToRack);
   const scanRackForPick = useWarehouseStore((s) => s.scanRackForPick);
+  const acceptPickTask = useWarehouseStore((s) => s.acceptPickTask);
   const pushToast = useWarehouseStore((s) => s.pushToast);
   const currentUser = useWarehouseStore((s) => s.currentUser);
 
@@ -288,6 +290,41 @@ export function StoragePage() {
           })()}
         </div>
       )}
+
+      {/* Queued tasks with no picker yet (e.g. everyone was busy when the
+          request/top-up/direct-dispatch assignment was made) — a picker
+          claims one directly instead of waiting for nextPendingStorageTaskFor
+          to hand it over once they finish other work. */}
+      {currentUser && isPickerLocationMatch(currentUser.id, 'storage') && (() => {
+        const claimableTasks = pickTasks.filter((t) => {
+          if (t.status !== 'PendingAcceptance' || t.assignedPickerId) return false;
+          if (t.origin !== 'Storage' && t.origin !== 'Bay-Topup') return false;
+          const itemDept = PRODUCTS.find((p) => p.sku === t.items[0]?.sku)?.department;
+          return !itemDept || itemDept === currentUser.department;
+        });
+        if (claimableTasks.length === 0) return null;
+        return (
+          <div className="space-y-3 rounded-2xl border border-amber-800 bg-amber-900/20 p-6">
+            <h2 className="text-lg font-semibold text-amber-200">🕒 Queued tasks awaiting a picker</h2>
+            {claimableTasks.map((t) => (
+              <div key={t.id} className="flex items-center justify-between rounded-lg bg-amber-950/30 border border-amber-800/40 px-3 py-2">
+                <span className="text-xs text-amber-100">
+                  {t.id} — {t.items.length} pallet(s){t.directDispatch ? ' · direct dispatch' : ''}
+                </span>
+                <button
+                  onClick={() => {
+                    const result = acceptPickTask({ pickTaskId: t.id, operatorId: currentUser.id });
+                    if (!result.ok) pushToast(result.error, 'error');
+                  }}
+                  className="rounded bg-amber-700 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600"
+                >
+                  Claim task
+                </button>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Picking workflow - when stock is requested (Storage Pickers only) */}
       {currentUser && isPickerLocationMatch(currentUser.id, 'storage') && (() => {

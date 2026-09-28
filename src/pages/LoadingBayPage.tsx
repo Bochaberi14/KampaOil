@@ -182,6 +182,11 @@ export function LoadingBayPage() {
         pushToast(arrivalResult.error, 'error');
         return;
       }
+      if (arrivalResult.data.routedToBayStaging) {
+        setLastDirectDispatchArrival(null);
+        setWizard((w) => ({ ...w, step: 'bay-staging', palletId }));
+        return;
+      }
       setLastDirectDispatchArrival({ palletId, dispatchLine: arrivalResult.data.dispatchLine });
       setWizard({ step: 'bay-arriving', palletId: null, palletIndex: 0, bayRackId: null });
       return;
@@ -210,6 +215,11 @@ export function LoadingBayPage() {
       const result = scanPalletArrivedForDirectDispatch({ palletId, operatorId: currentUser.id });
       if (!result.ok) {
         pushToast(result.error, 'error');
+        return;
+      }
+      if (result.data.routedToBayStaging) {
+        setLastDirectDispatchArrival(null);
+        setWizard((w) => ({ ...w, step: 'bay-staging', palletId }));
         return;
       }
       setLastDirectDispatchArrival({ palletId, dispatchLine: result.data.dispatchLine });

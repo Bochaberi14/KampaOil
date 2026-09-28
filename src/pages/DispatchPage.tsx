@@ -101,18 +101,20 @@ export function DispatchPage() {
     );
     // A pallet is freed to 'Empty' the instant its scan credits it (see
     // scanDispatchLine) — it can no longer show as 'StagedForDispatch' once
-    // that's happened, so this must accept either as "made it through".
+    // that's happened, so this must accept that. 'InTransitToBay'/'OnBay'
+    // means the Loader never released enough for it (see
+    // findExcessDirectDispatchPalletIds in the store) — it gave up on this
+    // truck and became ordinary bay stock, so it must not block it either.
+    const arrivedOrSettled = (status: string | undefined) =>
+      status === 'StagedForDispatch' || status === 'Empty' || status === 'InTransitToBay' || status === 'OnBay';
     const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
-      t.items.every((i) => {
-        const status = pallets.find((p) => p.id === i.palletId)?.status;
-        return status === 'StagedForDispatch' || status === 'Empty';
-      }),
+      t.items.every((i) => arrivedOrSettled(pallets.find((p) => p.id === i.palletId)?.status)),
     );
     const relevantApprovals = productionApprovals.filter((a) => skus.has(a.sku));
     const productionDirectCaptured = relevantApprovals.every((a) => {
       if ((a.palletsRemaining ?? 0) > 0) return false;
       const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
-      return taggedPallets.every((p) => p.status === 'StagedForDispatch' || p.status === 'Empty');
+      return taggedPallets.every((p) => arrivedOrSettled(p.status));
     });
     if (!storageDirectArrived || !productionDirectCaptured) {
       return "A direct-dispatch pallet for this vehicle hasn't arrived yet — scan now to bank what's already here, then scan again once it does.";

@@ -231,13 +231,16 @@ function findAvailablePickerByType(
   return null;
 }
 
-// Both HOD staging requests (requestStockFromStorageToLoadingBay) and bay
-// shortfall top-ups (requestTopUp) draw FIFO from storage racks and are
-// executed by a Storage Picker via scanRackForPick — so when every Storage
-// Picker is busy at request time, the task is created with no picker and
-// nothing ever revisits it (findAvailablePickerByType only runs once, at
-// creation). Call this right after a Storage Picker's task completes to hand
-// them the oldest still-unassigned one instead of leaving it stuck forever.
+// HOD staging requests (requestStockFromStorageToLoadingBay), bay shortfall
+// top-ups (requestTopUp), and Sales HOD storage direct-dispatch requests
+// (assignStorageDirectDispatchTasks) all draw FIFO from storage racks and
+// are executed by a Storage Picker via scanRackForPick — so when every
+// Storage Picker is busy at request time, the task is created with no
+// picker and nothing ever revisits it (findAvailablePickerByType only runs
+// once, at creation, or not at all — a Storage Picker's own completions are
+// what call this). Called right after a Storage Picker's task completes
+// (scanRackForPick, scanPalletToRack) to hand them the oldest still-
+// unassigned one instead of leaving it stuck forever.
 function nextPendingStorageTaskFor(pickTasks: PickTask[], picker: User): PickTask | null {
   const candidates = pickTasks
     .filter((t) => {
@@ -332,10 +335,10 @@ function selectReadyPalletsForLine(
 // different order that happens to share the SKU. Production pallets carry
 // this decision directly (productionDirectDispatchApprovalId, set once at
 // confirmLoad); Storage pallets don't, but the PickTask that released them
-// does (salesOrderId). Used only for the display hint below (which truck to
-// suggest); actual crediting always goes through buildDispatchManifest,
-// the one real gate — see the note on scanPalletArrivedForDirectDispatch's
-// earlier attempt at predicting that outcome here instead.
+// does (salesOrderId). Used for the arrival-scan display hint (which truck
+// to suggest) and by settleExcessDirectDispatchPallets below to scope a
+// pallet to only its own order; actual crediting always goes through
+// buildDispatchManifest, the one real gate.
 function findDirectDispatchSalesOrderId(
   state: Pick<WarehouseState, 'directDispatchApprovals' | 'pickTasks'>,
   pallet: Pallet,
@@ -516,6 +519,43 @@ function buildDispatchManifest(
   return { verification, claimedReleaseIds, anyNewRelease, newUnitsCount, pickedQty };
 }
 
+// Which of this order's already-arrived direct-dispatch pallets (Production
+// or Storage sourced) currently have no room on any of its assigned trucks —
+// called right after a Loader release changes the picture (see
+// releaseSalesOrderQuantity). Deliberately reuses buildDispatchManifest (the
+// one real, proven selection algorithm) as a dry run instead of re-predicting
+// its outcome with separate logic — a pallet arriving here already had that
+// attempted once and it repeatedly drifted out of sync with the real thing.
+function findExcessDirectDispatchPalletIds(
+  state: Pick<
+    WarehouseState,
+    | 'pallets'
+    | 'loads'
+    | 'dispatchVerifications'
+    | 'salesOrderReleases'
+    | 'pickTasks'
+    | 'dispatchAllocations'
+    | 'trucks'
+    | 'directDispatchApprovals'
+  >,
+  so: SalesOrder,
+): string[] {
+  const claimedByAnyAssignedTruck = new Set<string>();
+  for (const truckId of so.assignedTruckIds) {
+    const truck = state.trucks.find((t) => t.id === truckId);
+    if (!truck) continue;
+    const existing = state.dispatchVerifications.find((v) => v.salesOrderId === so.id && v.truckId === truckId);
+    const built = buildDispatchManifest(state, so, truck, existing, 'system');
+    if (built) built.verification.palletIds.forEach((id) => claimedByAnyAssignedTruck.add(id));
+  }
+
+  return state.pallets
+    .filter((p) => p.status === 'InTransitToTruck' && !!p.directDispatchArrivedAt)
+    .filter((p) => !claimedByAnyAssignedTruck.has(p.id))
+    .filter((p) => findDirectDispatchSalesOrderId(state, p) === so.id)
+    .map((p) => p.id);
+}
+
 // Whether every task/approval feeding this truck's manifest has actually
 // physically arrived — used to decide whether a dispatch-line scan can
 // close the truck out (free it, stop crediting) or must leave it open for
@@ -549,7 +589,15 @@ function truckDispatchFullyReady(
   // scanDispatchLine), which can happen on an earlier scan than the one that
   // finally closes this whole truck out — so 'StagedForDispatch' alone isn't
   // enough here; 'Empty' means it already made it through and was freed.
-  const arrivedOrSettled = (p: Pallet | undefined) => p?.status === 'StagedForDispatch' || p?.status === 'Empty';
+  // 'InTransitToBay'/'OnBay' means the Loader never released enough for it
+  // (see findExcessDirectDispatchPalletIds) — it gave up on this truck
+  // entirely and became ordinary bay stock, so it must not block this truck
+  // out forever either.
+  const arrivedOrSettled = (p: Pallet | undefined) =>
+    p?.status === 'StagedForDispatch' ||
+    p?.status === 'Empty' ||
+    p?.status === 'InTransitToBay' ||
+    p?.status === 'OnBay';
 
   const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
     t.items.every((i) => arrivedOrSettled(pallets.find((p) => p.id === i.palletId))),
@@ -560,9 +608,13 @@ function truckDispatchFullyReady(
   );
   const productionDirectCaptured = relevantApprovals.every((a) => {
     if ((a.palletsRemaining ?? 0) > 0) return false;
-    // Freeing also clears productionDirectDispatchApprovalId, so an
-    // already-settled pallet won't even show up in this filter anymore —
-    // an empty list here means "all of them already made it through."
+    // Falling back to bay storage (no room — see
+    // findExcessDirectDispatchPalletIds) clears productionDirectDispatchApprovalId,
+    // so a pallet that gave up on this approval won't show up in this filter
+    // anymore — an empty list here means "every one of them is settled."
+    // Freeing to 'Empty' after a real dispatch leaves the tag in place
+    // instead (see scanDispatchLine), which is why arrivedOrSettled below
+    // also accepts 'Empty', not just 'StagedForDispatch'/'OnBay'/'InTransitToBay'.
     const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
     return taggedPallets.every(arrivedOrSettled);
   });
@@ -686,6 +738,12 @@ interface WarehouseState {
     operatorId: string;
   }) => Result<{ task: PickTask | null }>;
   findPickItemByRack: (pickTaskId: string, rackId: string) => Result<{ palletId: string }>;
+  // Lets a Storage Picker claim a task left unassigned at creation time
+  // (findAvailablePickerByType found no one free) instead of waiting for
+  // nextPendingStorageTaskFor to hand it to whoever finishes another task
+  // next — without this, a 'PendingAcceptance' task is invisible: nothing
+  // in the UI ever showed one before a picker completed unrelated work.
+  acceptPickTask: (args: { pickTaskId: string; operatorId: string }) => Result;
   scanRackForPick: (args: {
     pickTaskId: string;
     palletId: string;
@@ -704,15 +762,15 @@ interface WarehouseState {
     operatorId: string;
   }) => Result;
   // Direct-dispatch pallets (InTransitToTruck) skip bay staging entirely —
-  // this is their one loading-bay checkpoint: confirm physical arrival,
-  // no destination rack scan, then the picker takes it straight to dispatch.
-  // Crediting toward an actual truck is decided later, at
-  // buildDispatchManifest/scanDispatchLine time — the Loader's release is
-  // what gates that, not this scan.
+  // this is their one loading-bay checkpoint: confirm physical arrival, then
+  // either take it straight to dispatch, or — if the Loader hasn't actually
+  // released enough of the line to use it yet — fall back to ordinary bay
+  // storage (routedToBayStaging), reusing buildDispatchManifest as a dry run
+  // (see findExcessDirectDispatchPalletIds) rather than a separate prediction.
   scanPalletArrivedForDirectDispatch: (args: {
     palletId: string;
     operatorId: string;
-  }) => Result<{ dispatchLine: string | null }>;
+  }) => Result<{ dispatchLine: string | null; routedToBayStaging: boolean }>;
 
   // Phase 2 — Dispatch picking (bay → dispatch line)
   assignDispatchPickingTasks: (args: {
@@ -727,10 +785,15 @@ interface WarehouseState {
   // truck needed up front — same as Production Direct, the destination
   // truck is only resolved later, at scanPalletArrivedForDirectDispatch /
   // generateManifestForPickingComplete time.
+  // A null pickerId means "auto-assign an available Storage Picker now, or
+  // queue it unassigned for the next one who frees up" (see
+  // findAvailablePickerByType / nextPendingStorageTaskFor) — this used to
+  // hard-require a specific picker, with no way to submit at all when none
+  // were free.
   assignStorageDirectDispatchTasks: (args: {
     salesOrderId: string;
     lineId: string;
-    assignments: { pickerId: string; qty: number }[];
+    assignments: { pickerId: string | null; qty: number }[];
     operatorId: string;
   }) => Result<{ tasks: PickTask[] }>;
   executeDispatchPicking: (args: {
@@ -1444,6 +1507,22 @@ export const useWarehouseStore = create<WarehouseState>()(
           get().pushToast(`Pallet ${palletId} racked at ${rackId} / slot ${slot.index + 1}`, 'success');
         }
         get().enqueueSapSync('StorageMovement', `Pallet ${palletId} stored at ${rackId}/slot ${slot.index + 1}`);
+        // This Storage Picker just freed up — hand them the oldest still-
+        // unassigned HOD/top-up request instead of leaving it stuck until
+        // someone happens to complete a scanRackForPick call instead (see
+        // nextPendingStorageTaskFor).
+        if (putAwayTask && putAwayCompleted) {
+          const picker = USERS.find((u) => u.id === operatorId);
+          const nextTask = picker ? nextPendingStorageTaskFor(get().pickTasks, picker) : null;
+          if (nextTask) {
+            set((state) => ({
+              pickTasks: state.pickTasks.map((t) =>
+                t.id === nextTask.id ? { ...t, status: 'Accepted', assignedPickerId: operatorId } : t,
+              ),
+            }));
+            get().pushToast(`${picker!.name} auto-assigned to queued task ${nextTask.id}`, 'info');
+          }
+        }
         return ok(undefined);
       },
 
@@ -1595,6 +1674,31 @@ export const useWarehouseStore = create<WarehouseState>()(
         const item = task.items.find((i) => i.sourceRackId === rackId && !i.picked);
         if (!item) return err(`No pallet from this pick task is stored at rack ${rackId}`);
         return ok({ palletId: item.palletId });
+      },
+
+      acceptPickTask: ({ pickTaskId, operatorId }) => {
+        const state = get();
+        if (!can(state.currentUser?.role, 'execute:pickTask')) {
+          return err(`${state.currentUser?.role ?? 'This role'} cannot claim pick tasks — requires Picker`);
+        }
+        const task = state.pickTasks.find((t) => t.id === pickTaskId);
+        if (!task) return err(`Pick task "${pickTaskId}" not found`);
+        if (task.status !== 'PendingAcceptance' || task.assignedPickerId) {
+          return err(`Pick task ${pickTaskId} is not waiting for a picker`);
+        }
+        const picker = USERS.find((u) => u.id === operatorId);
+        if (!picker) return err(`Picker "${operatorId}" not found`);
+        const itemDept = PRODUCTS.find((p) => p.sku === task.items[0]?.sku)?.department;
+        if (itemDept && picker.department !== itemDept) {
+          return err(`This task is for ${itemDept}, but you are in ${picker.department} — cannot claim`);
+        }
+        set((s) => ({
+          pickTasks: s.pickTasks.map((t) =>
+            t.id === pickTaskId ? { ...t, status: 'Accepted' as const, assignedPickerId: operatorId } : t,
+          ),
+        }));
+        get().pushToast(`${picker.name} claimed task ${pickTaskId}`, 'success');
+        return ok(undefined);
       },
 
       scanRackForPick: ({ pickTaskId, palletId, rackId, operatorId }) => {
@@ -1801,21 +1905,72 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
 
-        // Deliberately no "is there room" prediction here (an earlier version
-        // tried, to auto-fall-back to bay storage when the Loader hadn't
-        // released enough yet — see git history). That required re-deriving
-        // buildDispatchManifest's per-truck selection outside of a real
-        // truck/manifest context, which repeatedly produced false negatives
-        // (a placeholder "no truck yet" id can't be told apart from a truck
-        // this exact order already has, double-charging its own pallets).
-        // buildDispatchManifest/scanDispatchLine remain the one real gate:
-        // this just confirms physical arrival: a pallet only gets credited
-        // once the Loader has actually released enough, whenever that scan
-        // happens, regardless of arrival order.
         const matchedSalesOrderId = findDirectDispatchSalesOrderId(state, pallet);
         const matchedSo = matchedSalesOrderId
           ? state.salesOrders.find((s) => s.id === matchedSalesOrderId)
           : undefined;
+
+        // Is there actually room for it right now? Simulate the arrival (the
+        // pallet isn't marked arrived yet) and ask the one real, proven
+        // selection algorithm (buildDispatchManifest, via
+        // findExcessDirectDispatchPalletIds) rather than predicting the
+        // answer with separate logic — an earlier attempt at that
+        // (see git history) repeatedly drifted out of sync with the real
+        // crediting rules. This is the same dry run releaseSalesOrderQuantity
+        // uses when a release changes the picture; this covers the case
+        // where the pallet arrives only *after* an already-insufficient
+        // release, which that alone can't catch.
+        //
+        // Fails CLOSED, not open: a Production pallet's order link
+        // (productionDirectDispatchApprovalId → approval.salesOrderId) is
+        // only an SKU match at confirmLoad time — a ProductionOrder has no
+        // salesOrderId of its own, so nothing guarantees it resolves. A
+        // Storage pallet's link is embedded in its PickTask at creation and
+        // always resolves. If we can't identify which order this pallet
+        // belongs to, don't wave it through on the assumption there's room —
+        // fall back to ordinary bay stock, the same as if there genuinely
+        // wasn't any.
+        const now = new Date().toISOString();
+        const stateWithArrival: WarehouseState = {
+          ...state,
+          pallets: state.pallets.map((p) => (p.id === palletId ? { ...p, directDispatchArrivedAt: now } : p)),
+        };
+        const hasRoom = !!matchedSo && !findExcessDirectDispatchPalletIds(stateWithArrival, matchedSo).includes(palletId);
+
+        if (!hasRoom) {
+          const load = findCurrentLoadForPallet(state.loads, palletId);
+          const bayRec = load ? recommendBayLocation(state.bayRacks, load.sku, palletId, state.pallets) : null;
+          set((state) => ({
+            pallets: state.pallets.map((p) =>
+              p.id === palletId
+                ? {
+                    ...p,
+                    status: 'InTransitToBay' as const,
+                    location: { type: 'InTransit' as const },
+                    productionDirectDispatchApprovalId: null,
+                    recommendedBayLocation: bayRec ?? p.recommendedBayLocation,
+                  }
+                : p,
+            ),
+            movements: [
+              ...state.movements,
+              {
+                id: generateMovementId(),
+                palletId,
+                from: 'InTransit (Direct Dispatch)',
+                to: 'Loading Bay (not yet released — staged as bay stock)',
+                timestamp: now,
+                operatorId,
+              },
+            ],
+          }));
+          get().pushToast(
+            `Pallet ${palletId} arrived, but hasn't been released for dispatch yet — stow it in the bay like normal stock`,
+            'info',
+          );
+          return ok({ dispatchLine: null, routedToBayStaging: true });
+        }
+
         // Display-only hint for the toast below — the real truck attribution
         // happens later at document-generation time (see
         // generateManifestForPickingComplete), which correctly handles more
@@ -1826,7 +1981,6 @@ export const useWarehouseStore = create<WarehouseState>()(
           : undefined;
         const dispatchLine = truck?.dispatchLine ?? null;
 
-        const now = new Date().toISOString();
         set((state) => ({
           pallets: state.pallets.map((p) =>
             p.id === palletId ? { ...p, directDispatchArrivedAt: now } : p,
@@ -1849,7 +2003,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             : `✓ Pallet ${palletId} arrived — take it straight to dispatch`,
           'success',
         );
-        return ok({ dispatchLine });
+        return ok({ dispatchLine, routedToBayStaging: false });
       },
 
       assignDispatchPickingTasks: ({ salesOrderId, lineId, truckId, assignments }) => {
@@ -1943,6 +2097,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const productDept = PRODUCTS.find((p) => p.sku === line.sku)?.department;
         for (const a of assignments) {
           if (a.qty <= 0) return err('Each picker\'s quantity must be greater than zero');
+          if (a.pickerId === null) continue; // auto-assign/queue — resolved at creation time below
           const picker = USERS.find((u) => u.id === a.pickerId);
           if (!picker || picker.role !== 'Picker') return err(`"${a.pickerId}" is not a valid Picker`);
           if (productDept && picker.department !== productDept) {
@@ -1971,22 +2126,30 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
 
         const tasks: PickTask[] = [];
+        const assignedLabels: string[] = [];
         for (const a of assignments) {
           const liveState = get();
           // Select from storage for direct dispatch
           const items = selectFifoPickItems(liveState, line.sku, a.qty);
           if (items.length === 0) {
             return err(
-              `Ran out of storage stock for SKU ${line.sku} while assigning ${a.pickerId} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
+              `Ran out of storage stock for SKU ${line.sku} while assigning ${a.pickerId ?? 'a picker'} — assigned ${tasks.length} of ${assignments.length} picker(s) before running out`,
             );
           }
+          // No picker chosen — try to auto-assign one free right now
+          // (re-checked live each iteration so two auto-assign rows in the
+          // same submission never land on the same picker); if none is
+          // free, queue it unassigned instead of blocking the request
+          // entirely — nextPendingStorageTaskFor hands it to the next
+          // Storage Picker who completes a task.
+          const assignedPickerId = a.pickerId ?? findAvailablePickerByType(liveState, productDept, 'storage')?.id ?? null;
           const task: PickTask = {
             id: generatePickTaskId(),
             salesOrderId,
             origin: 'Storage',
             items,
-            status: 'Accepted',
-            assignedPickerId: a.pickerId,
+            status: assignedPickerId ? 'Accepted' : 'PendingAcceptance',
+            assignedPickerId,
             directDispatch: true,  // Key flag: this bypasses staging
             createdAt: new Date().toISOString(),
             // No truck needed up front — resolved later at arrival-scan /
@@ -1994,12 +2157,13 @@ export const useWarehouseStore = create<WarehouseState>()(
             truckId: null,
           };
           tasks.push(task);
+          assignedLabels.push(
+            `${assignedPickerId ? (USERS.find((u) => u.id === assignedPickerId)?.name ?? assignedPickerId) : 'queued — no picker free yet'} (${a.qty} units)`,
+          );
           set((s) => ({ pickTasks: [...s.pickTasks, task] }));
         }
         get().pushToast(
-          `Assigned ${tasks.length} storage picker(s) for direct dispatch: ${assignments
-            .map((a) => `${USERS.find((u) => u.id === a.pickerId)?.name ?? a.pickerId} (${a.qty} units)`)
-            .join(', ')}`,
+          `Created ${tasks.length} storage direct-dispatch task(s): ${assignedLabels.join(', ')}`,
           'success',
         );
         return ok({ tasks });
@@ -2161,20 +2325,29 @@ export const useWarehouseStore = create<WarehouseState>()(
             picked: false,
           };
         });
+        // Try to auto-assign to an available Storage Picker in this
+        // product's department, same as requestStockFromStorageToLoadingBay
+        // — this used to always leave top-ups unassigned even when a
+        // picker was free right now.
+        const department = PRODUCTS.find((p) => p.sku === line.sku)?.department;
+        const availablePicker = findAvailablePickerByType(state, department, 'storage');
+
         const task: PickTask = {
           id: generatePickTaskId(),
           salesOrderId,
           origin: 'Bay-Topup',
           items,
-          status: 'PendingAcceptance',
-          assignedPickerId: null,
+          status: availablePicker ? 'Accepted' : 'PendingAcceptance',
+          assignedPickerId: availablePicker?.id ?? null,
           directDispatch,
           createdAt: new Date().toISOString(),
           truckId: null,
         };
         set((state) => ({ pickTasks: [...state.pickTasks, task] }));
         get().pushToast(
-          `Bay short by ${shortfall} units for ${line.sku} — top-up pick task created from Storage (FIFO)`,
+          availablePicker
+            ? `Bay short by ${shortfall} units for ${line.sku} — top-up pick task assigned to ${availablePicker.name}`
+            : `Bay short by ${shortfall} units for ${line.sku} — top-up pick task created from Storage (FIFO)`,
           'info',
         );
         return ok({ task });
@@ -2252,6 +2425,54 @@ export const useWarehouseStore = create<WarehouseState>()(
           'SalesOrderReleased',
           `${salesOrderId}: ${qty.toLocaleString()} units released by ${operatorId}`,
         );
+
+        // A release can settle a question that's been open since a
+        // direct-dispatch pallet arrived: does it actually have room now?
+        // Re-check with the real selection logic (buildDispatchManifest) —
+        // any already-arrived pallet still without room falls back to
+        // ordinary bay storage instead of sitting "ready" indefinitely for a
+        // release that never came.
+        const afterRelease = get();
+        const soAfterRelease = afterRelease.salesOrders.find((s) => s.id === salesOrderId);
+        if (soAfterRelease) {
+          const excessPalletIds = findExcessDirectDispatchPalletIds(afterRelease, soAfterRelease);
+          if (excessPalletIds.length > 0) {
+            const now = new Date().toISOString();
+            set((state) => ({
+              pallets: state.pallets.map((p) => {
+                if (!excessPalletIds.includes(p.id)) return p;
+                const load = findCurrentLoadForPallet(state.loads, p.id);
+                const bayRec = load
+                  ? recommendBayLocation(state.bayRacks, load.sku, p.id, state.pallets)
+                  : null;
+                return {
+                  ...p,
+                  status: 'InTransitToBay' as const,
+                  location: { type: 'InTransit' as const },
+                  directDispatchArrivedAt: undefined,
+                  productionDirectDispatchApprovalId: null,
+                  recommendedBayLocation: bayRec ?? p.recommendedBayLocation,
+                };
+              }),
+              movements: [
+                ...state.movements,
+                ...excessPalletIds.map((palletId) => ({
+                  id: generateMovementId(),
+                  palletId,
+                  from: 'InTransit (Direct Dispatch)',
+                  to: 'Loading Bay (not enough released — staged as bay stock)',
+                  timestamp: now,
+                  operatorId,
+                })),
+              ],
+            }));
+            get().pushToast(
+              `${excessPalletIds.length} direct-dispatch pallet(s) exceed what's released for ${salesOrderId} — routed to ordinary bay storage instead`,
+              'info',
+            );
+          }
+        }
+
         return ok({ release });
       },
 

@@ -20,7 +20,6 @@ export function SalesHodPage() {
 
   const openOrders = salesOrders.filter((so) => so.status !== 'Fulfilled');
   const selectedSO = openOrders.find((so) => so.id === selectedSOId) ?? null;
-  const soPickTasks = selectedSO ? pickTasks.filter((t) => t.salesOrderId === selectedSO.id) : [];
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -73,7 +72,7 @@ export function SalesHodPage() {
               key={line.id}
               order={selectedSO}
               line={line}
-              soPickTasks={soPickTasks}
+              allPickTasks={pickTasks}
               availableOnBay={availableOnBay}
               availableInStorage={availableInStorage}
               directDispatchApprovals={directDispatchApprovals}
@@ -96,7 +95,7 @@ export function SalesHodPage() {
 function SalesHodLinePanel({
   order,
   line,
-  soPickTasks,
+  allPickTasks,
   availableOnBay,
   availableInStorage,
   directDispatchApprovals,
@@ -107,7 +106,7 @@ function SalesHodLinePanel({
 }: {
   order: SalesOrder;
   line: SalesOrderLine;
-  soPickTasks: PickTask[];
+  allPickTasks: PickTask[];
   availableOnBay: (sku: string) => number;
   availableInStorage: (sku: string) => number;
   directDispatchApprovals: DirectDispatchApproval[];
@@ -121,7 +120,7 @@ function SalesHodLinePanel({
   assignStorageDirectDispatchTasks: (args: {
     salesOrderId: string;
     lineId: string;
-    assignments: { pickerId: string; qty: number }[];
+    assignments: { pickerId: string | null; qty: number }[];
     operatorId: string;
   }) => Result<{ tasks: PickTask[] }>;
   pushToast: (message: string, kind?: ToastKind) => void;
@@ -184,21 +183,25 @@ function SalesHodLinePanel({
       return;
     }
 
-    let storageAssignments: { pickerId: string; qty: number }[] = [];
+    let storageAssignments: { pickerId: string | null; qty: number }[] = [];
     if (requestingStorage) {
-      const incomplete = storagePickerRows.some((r) => (r.pickerId && !r.qty) || (!r.pickerId && r.qty));
+      // A row with a quantity but no picker chosen is valid now — it means
+      // "auto-assign whoever's free, or queue it" (see
+      // assignStorageDirectDispatchTasks). Only a picker with no quantity is
+      // actually incomplete.
+      const incomplete = storagePickerRows.some((r) => r.pickerId && !r.qty);
       if (incomplete) {
         pushToast('Enter a quantity for every picker you selected (or remove the empty row)', 'error');
         return;
       }
       storageAssignments = storagePickerRows
-        .filter((r) => r.pickerId && r.qty)
-        .map((r) => ({ pickerId: r.pickerId, qty: Number(r.qty) }));
+        .filter((r) => r.qty)
+        .map((r) => ({ pickerId: r.pickerId || null, qty: Number(r.qty) }));
       if (storageAssignments.length === 0) {
-        pushToast('Add at least one storage picker', 'error');
+        pushToast('Enter a quantity for at least one row', 'error');
         return;
       }
-      const pickerIds = storageAssignments.map((a) => a.pickerId);
+      const pickerIds = storageAssignments.map((a) => a.pickerId).filter((id): id is string => !!id);
       const duplicates = pickerIds.filter((id, idx) => pickerIds.indexOf(id) !== idx);
       if (duplicates.length > 0) {
         pushToast(
@@ -359,10 +362,14 @@ function SalesHodLinePanel({
                         }}
                         className="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-xs text-white"
                       >
-                        <option value="">Select storage picker...</option>
+                        <option value="">Auto-assign / queue for next available picker</option>
                         {USERS.filter((u) => u.role === 'Picker' && getPickerType(u.id) === 'storage')
                           .filter((u) => {
-                            const hasOngoingTask = soPickTasks.some(
+                            // Checked against ALL pick tasks, not just this
+                            // sales order's — a picker already Accepted on a
+                            // different order's task is still busy and must
+                            // not be offered here too.
+                            const hasOngoingTask = allPickTasks.some(
                               (t) => t.assignedPickerId === u.id && t.status === 'Accepted',
                             );
                             return !hasOngoingTask;
