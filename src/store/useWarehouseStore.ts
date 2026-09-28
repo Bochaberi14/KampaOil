@@ -3007,18 +3007,30 @@ export const useWarehouseStore = create<WarehouseState>()(
         // credit — once every task/approval feeding its manifest has
         // actually arrived. Otherwise leave it open so the next picker who
         // finishes their own task can scan in their portion too.
+        // Once this scan brings every line's dispatched quantity up to what
+        // the Loader has released, nothing more can go on this vehicle until
+        // another release — so it has left, and its dispatch line is free
+        // for reuse. Still-pending direct-dispatch pallets/tasks don't hold
+        // it: with no released room they fall back to bay stock (see
+        // scanPalletArrivedForDirectDispatch), and a later release goes out
+        // on whichever vehicle is registered next.
+        const allReleasedDispatched = so.lines.every(
+          (l) => l.dispatchedQty + (deltaBySku[l.sku] ?? 0) >= l.releasedQty,
+        );
+
         // A selected pallet still in the bay also keeps the truck open, even
         // with no dispatch picking task assigned for it yet.
         const fullyReady =
           stillInBayPalletIds.length === 0 &&
-          truckDispatchFullyReady(
-            state.pickTasks,
-            palletsAfterThisScan,
-            state.directDispatchApprovals,
-            salesOrderId,
-            truck.id,
-            refreshed,
-          );
+          (allReleasedDispatched ||
+            truckDispatchFullyReady(
+              state.pickTasks,
+              palletsAfterThisScan,
+              state.directDispatchApprovals,
+              salesOrderId,
+              truck.id,
+              refreshed,
+            ));
 
         const now = new Date().toISOString();
         const updated: DispatchVerification = {
