@@ -237,20 +237,36 @@ function findAvailablePickerByType(
 // are executed by a Storage Picker via scanRackForPick — so when every
 // Storage Picker is busy at request time, the task is created with no
 // picker and nothing ever revisits it (findAvailablePickerByType only runs
-// once, at creation, or not at all — a Storage Picker's own completions are
-// what call this). Called right after a Storage Picker's task completes
-// (scanRackForPick, scanPalletToRack) to hand them the oldest still-
-// unassigned one instead of leaving it stuck forever.
-function nextPendingStorageTaskFor(pickTasks: PickTask[], picker: User): PickTask | null {
-  const candidates = pickTasks
-    .filter((t) => {
-      if (t.status !== 'PendingAcceptance' || t.assignedPickerId) return false;
-      if (t.origin !== 'Storage' && t.origin !== 'Bay-Topup') return false;
-      const itemDept = PRODUCTS.find((p) => p.sku === t.items[0]?.sku)?.department;
-      return !itemDept || itemDept === picker.department;
-    })
+// once, at creation). Called right after a Storage Picker's task completes
+// (scanRackForPick, scanPalletToRack): hands each still-unassigned task,
+// oldest first, to whichever Storage Picker in its department is free now.
+// Deliberately not keyed on whoever performed the scan — in demo mode (or a
+// supervisor scanning on a picker's behalf) that's not the picker who just
+// freed up, which used to leave the queue stuck forever.
+function assignQueuedStorageTasks(pickTasks: PickTask[]): {
+  pickTasks: PickTask[];
+  assigned: { taskId: string; picker: User }[];
+} {
+  const queued = pickTasks
+    .filter(
+      (t) =>
+        t.status === 'PendingAcceptance' &&
+        !t.assignedPickerId &&
+        (t.origin === 'Storage' || t.origin === 'Bay-Topup'),
+    )
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  return candidates[0] ?? null;
+  let working = pickTasks;
+  const assigned: { taskId: string; picker: User }[] = [];
+  for (const task of queued) {
+    const dept = PRODUCTS.find((p) => p.sku === task.items[0]?.sku)?.department;
+    const picker = findAvailablePickerByType({ pickTasks: working, currentUser: null }, dept, 'storage');
+    if (!picker) continue;
+    working = working.map((t) =>
+      t.id === task.id ? { ...t, status: 'Accepted' as const, assignedPickerId: picker.id } : t,
+    );
+    assigned.push({ taskId: task.id, picker });
+  }
+  return { pickTasks: working, assigned };
 }
 
 // Pallets physically ready to leave for this truck's sales order — staged at
@@ -1533,20 +1549,15 @@ export const useWarehouseStore = create<WarehouseState>()(
           get().pushToast(`Pallet ${palletId} racked at ${rackId} / slot ${slot.index + 1}`, 'success');
         }
         get().enqueueSapSync('StorageMovement', `Pallet ${palletId} stored at ${rackId}/slot ${slot.index + 1}`);
-        // This Storage Picker just freed up — hand them the oldest still-
-        // unassigned HOD/top-up request instead of leaving it stuck until
-        // someone happens to complete a scanRackForPick call instead (see
-        // nextPendingStorageTaskFor).
+        // A Storage Picker just freed up — hand out any still-unassigned
+        // HOD/top-up request instead of leaving it stuck until someone
+        // happens to complete a scanRackForPick call instead (see
+        // assignQueuedStorageTasks).
         if (putAwayTask && putAwayCompleted) {
-          const picker = USERS.find((u) => u.id === operatorId);
-          const nextTask = picker ? nextPendingStorageTaskFor(get().pickTasks, picker) : null;
-          if (nextTask) {
-            set((state) => ({
-              pickTasks: state.pickTasks.map((t) =>
-                t.id === nextTask.id ? { ...t, status: 'Accepted', assignedPickerId: operatorId } : t,
-              ),
-            }));
-            get().pushToast(`${picker!.name} auto-assigned to queued task ${nextTask.id}`, 'info');
+          const { pickTasks, assigned } = assignQueuedStorageTasks(get().pickTasks);
+          if (assigned.length > 0) {
+            set({ pickTasks });
+            for (const a of assigned) get().pushToast(`${a.picker.name} auto-assigned to queued task ${a.taskId}`, 'info');
           }
         }
         return ok(undefined);
@@ -1803,15 +1814,10 @@ export const useWarehouseStore = create<WarehouseState>()(
           );
         }
         if (taskCompleted) {
-          const picker = USERS.find((u) => u.id === operatorId);
-          const nextTask = picker ? nextPendingStorageTaskFor(get().pickTasks, picker) : null;
-          if (nextTask) {
-            set((state) => ({
-              pickTasks: state.pickTasks.map((t) =>
-                t.id === nextTask.id ? { ...t, status: 'Accepted', assignedPickerId: operatorId } : t,
-              ),
-            }));
-            get().pushToast(`${picker!.name} auto-assigned to queued task ${nextTask.id}`, 'info');
+          const { pickTasks, assigned } = assignQueuedStorageTasks(get().pickTasks);
+          if (assigned.length > 0) {
+            set({ pickTasks });
+            for (const a of assigned) get().pushToast(`${a.picker.name} auto-assigned to queued task ${a.taskId}`, 'info');
           }
         }
         return ok(undefined);
