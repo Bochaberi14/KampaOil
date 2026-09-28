@@ -99,14 +99,20 @@ export function DispatchPage() {
     const relevantStorageDirectTasks = soPickTasks.filter(
       (t) => t.origin === 'Storage' && t.directDispatch && t.items.some((i) => skus.has(i.sku)),
     );
+    // A pallet is freed to 'Empty' the instant its scan credits it (see
+    // scanDispatchLine) — it can no longer show as 'StagedForDispatch' once
+    // that's happened, so this must accept either as "made it through".
     const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
-      t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
+      t.items.every((i) => {
+        const status = pallets.find((p) => p.id === i.palletId)?.status;
+        return status === 'StagedForDispatch' || status === 'Empty';
+      }),
     );
     const relevantApprovals = productionApprovals.filter((a) => skus.has(a.sku));
     const productionDirectCaptured = relevantApprovals.every((a) => {
       if ((a.palletsRemaining ?? 0) > 0) return false;
       const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
-      return taggedPallets.every((p) => p.status === 'StagedForDispatch');
+      return taggedPallets.every((p) => p.status === 'StagedForDispatch' || p.status === 'Empty');
     });
     if (!storageDirectArrived || !productionDirectCaptured) {
       return "A direct-dispatch pallet for this vehicle hasn't arrived yet — scan now to bank what's already here, then scan again once it does.";
@@ -115,13 +121,13 @@ export function DispatchPage() {
     return null;
   }
 
-  // Whether a specific truck's dispatch line has already been scanned — used
-  // per pick task / per production-direct batch below, since each can be
-  // routed to a different one of the order's active trucks.
-  function isLineScannedForTruck(truckId: string | null) {
-    if (!truckId || !selectedSO) return false;
-    return !!dispatchVerifications.find((v) => v.salesOrderId === selectedSO.id && v.truckId === truckId)
-      ?.dispatchLineScannedAt;
+  // Whether every pallet on a task has actually been scanned/credited and
+  // freed — 'Empty' is the one unambiguous "this went through a real
+  // dispatch-line scan" signal, since a pallet reaches 'StagedForDispatch'
+  // for ordinary bay-picked tasks (via executeDispatchPicking) well before
+  // any scan, not just as this scan's fleeting mid-commit state.
+  function taskConfirmedDispatched(items: { palletId: string }[]) {
+    return items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'Empty');
   }
 
   // Three-stage lifecycle for a direct-dispatch pick task: moving (In
@@ -129,14 +135,16 @@ export function DispatchPage() {
   // (Completed). A task's own 'Completed' status only means "left storage" —
   // it isn't staged until the pallet is physically confirmed at the bay.
   function pickTaskDisplayStatus(t: (typeof pickTasks)[number]) {
-    const lineScanned = isLineScannedForTruck(t.truckId);
     if (t.origin === 'Storage' && t.directDispatch) {
       if (t.status !== 'Completed') return t.status;
-      const allArrived = t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.directDispatchArrivedAt);
+      const allArrived = t.items.every((i) => {
+        const p = pallets.find((pp) => pp.id === i.palletId);
+        return !!p?.directDispatchArrivedAt || p?.status === 'Empty';
+      });
       if (!allArrived) return 'In Progress';
-      return lineScanned ? 'Completed' : 'Staged';
+      return taskConfirmedDispatched(t.items) ? 'Completed' : 'Staged';
     }
-    if (t.status === 'Completed') return lineScanned ? 'Completed' : 'Staged';
+    if (t.status === 'Completed') return taskConfirmedDispatched(t.items) ? 'Completed' : 'Staged';
     return t.status;
   }
 
@@ -293,22 +301,26 @@ export function DispatchPage() {
                     // SKU+'InTransitToTruck' filter alone loses track of it
                     // right at that point, making progress that just
                     // advanced (to Staged) look like it reset to "In Progress".
+                    // 'Empty' is included too — that's this pallet already
+                    // scanned, credited, and freed (see scanDispatchLine);
+                    // productionDirectDispatchApprovalId is deliberately left
+                    // in place through that reset just so this keeps finding it.
                     const productionDirectPallets = pallets.filter(
                       (p) =>
                         p.productionDirectDispatchApprovalId === approval.id &&
-                        (p.status === 'InTransitToTruck' || p.status === 'StagedForDispatch'),
+                        (p.status === 'InTransitToTruck' || p.status === 'StagedForDispatch' || p.status === 'Empty'),
                     );
                     const productionArrived = productionDirectPallets.filter(
-                      (p) => p.status === 'StagedForDispatch' || p.directDispatchArrivedAt,
+                      (p) => p.status === 'StagedForDispatch' || p.status === 'Empty' || p.directDispatchArrivedAt,
                     );
-                    // Truck attribution for these pallets only exists once
-                    // they're staged (see generateManifestForPickingComplete)
-                    // — read it straight off the pallet rather than guessing
-                    // from the order, since more than one truck can be active.
-                    const stagedPallet = productionDirectPallets.find(
-                      (p) => p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine',
-                    );
-                    const productionTruckId = stagedPallet ? (stagedPallet.location as any).truckId : null;
+                    // Once freed the pallet's own location resets to
+                    // FreePool, losing the truck attribution a still-staged
+                    // pallet's location would carry — but 'Empty' already
+                    // unambiguously means "scanned and confirmed", so that's
+                    // the completion signal instead of tracking a truck id.
+                    const allConfirmed =
+                      productionDirectPallets.length > 0 &&
+                      productionDirectPallets.every((p) => p.status === 'Empty');
                     return (
                       <li key={approval.id} className="flex items-center justify-between text-xs">
                         <span className="text-slate-300">
@@ -320,7 +332,7 @@ export function DispatchPage() {
                         <StatusPill
                           status={
                             productionDirectPallets.length > 0 && productionArrived.length >= productionDirectPallets.length
-                              ? (isLineScannedForTruck(productionTruckId) ? 'Completed' : 'Staged')
+                              ? (allConfirmed ? 'Completed' : 'Staged')
                               : 'In Progress'
                           }
                         />

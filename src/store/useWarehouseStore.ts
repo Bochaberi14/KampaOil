@@ -545,8 +545,14 @@ function truckDispatchFullyReady(
       t.directDispatch &&
       t.items.some((i) => skus.has(i.sku)),
   );
+  // A pallet that's credited gets freed to 'Empty' immediately (see
+  // scanDispatchLine), which can happen on an earlier scan than the one that
+  // finally closes this whole truck out — so 'StagedForDispatch' alone isn't
+  // enough here; 'Empty' means it already made it through and was freed.
+  const arrivedOrSettled = (p: Pallet | undefined) => p?.status === 'StagedForDispatch' || p?.status === 'Empty';
+
   const storageDirectArrived = relevantStorageDirectTasks.every((t) =>
-    t.items.every((i) => pallets.find((p) => p.id === i.palletId)?.status === 'StagedForDispatch'),
+    t.items.every((i) => arrivedOrSettled(pallets.find((p) => p.id === i.palletId))),
   );
 
   const relevantApprovals = directDispatchApprovals.filter(
@@ -554,8 +560,11 @@ function truckDispatchFullyReady(
   );
   const productionDirectCaptured = relevantApprovals.every((a) => {
     if ((a.palletsRemaining ?? 0) > 0) return false;
+    // Freeing also clears productionDirectDispatchApprovalId, so an
+    // already-settled pallet won't even show up in this filter anymore —
+    // an empty list here means "all of them already made it through."
     const taggedPallets = pallets.filter((p) => p.productionDirectDispatchApprovalId === a.id);
-    return taggedPallets.every((p) => p.status === 'StagedForDispatch');
+    return taggedPallets.every(arrivedOrSettled);
   });
 
   return storageDirectArrived && productionDirectCaptured;
@@ -2777,8 +2786,17 @@ export const useWarehouseStore = create<WarehouseState>()(
                         location: { type: 'FreePool' as const },
                         loadId: null,
                         holdId: null,
+                        // directDispatchArrivedAt must be cleared — a stale
+                        // timestamp would make this pallet look pre-arrived
+                        // the moment it's reused for a new direct-dispatch
+                        // cycle. productionDirectDispatchApprovalId is
+                        // deliberately LEFT AS-IS: it's how
+                        // truckDispatchFullyReady and the Dispatch page's own
+                        // progress display recognize an already-freed pallet
+                        // as "settled" rather than losing track of it — and
+                        // confirmLoad overwrites it fresh on this pallet's
+                        // next cycle regardless, so nothing leaks forward.
                         directDispatchArrivedAt: undefined,
-                        productionDirectDispatchApprovalId: undefined,
                         recommendedStorageLocation: undefined,
                         recommendedBayLocation: undefined,
                       }

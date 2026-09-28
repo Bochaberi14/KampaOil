@@ -288,14 +288,25 @@ function SalesHodLinePanel({
       {lineApprovals.length > 0 && (
         <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 space-y-1">
           <p className="text-xs font-semibold text-emerald-300 mb-1">✓ Direct Dispatch Approved</p>
-          {lineApprovals.map((a) => (
-            <p key={a.id} className="text-xs text-emerald-100">
-              {a.source} direct dispatch: {a.shortfallQty.toLocaleString()} units
-              {a.source === 'Production' && a.palletsRemaining != null
-                ? ` (${a.palletsRemaining} pallet${a.palletsRemaining === 1 ? '' : 's'} remaining)`
-                : ''}
-            </p>
-          ))}
+          {lineApprovals.map((a) => {
+            // Production's real commitment is the bounded pallet count, not
+            // shortfallQty — that field is each source's own independent gap
+            // analysis at request time, so requesting Storage AND Production
+            // for the same gap makes both show the full amount instead of
+            // splitting it. palletsRemaining is what actually gets diverted.
+            const displayUnits =
+              a.source === 'Production' && a.palletsRemaining != null
+                ? a.palletsRemaining * unitsPerPallet(line.sku)
+                : a.shortfallQty;
+            return (
+              <p key={a.id} className="text-xs text-emerald-100">
+                {a.source} direct dispatch: {displayUnits.toLocaleString()} units
+                {a.source === 'Production' && a.palletsRemaining != null
+                  ? ` (${a.palletsRemaining} pallet${a.palletsRemaining === 1 ? '' : 's'} remaining)`
+                  : ''}
+              </p>
+            );
+          })}
         </div>
       )}
 
