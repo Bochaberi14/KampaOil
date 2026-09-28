@@ -155,9 +155,12 @@ export function DispatchPage() {
   // Loaded pallet diverted straight from Production. Both land on the same
   // InTransitToTruck status, so filtering on that (+ matching SKU) covers
   // either path without needing to know which one a pallet came from.
+  // Only once its Loading Bay arrival scan confirmed there's released room
+  // for it (directDispatchArrivedAt) — before that it's still in transit and
+  // may yet fall back to bay stock if the Loader hasn't released enough.
   const readyForDirectDispatch = selectedSO
     ? pallets
-        .filter((p) => p.status === 'InTransitToTruck')
+        .filter((p) => p.status === 'InTransitToTruck' && !!p.directDispatchArrivedAt)
         .map((p) => p.id)
         .filter((palletId) =>
           selectedSO.lines.some((l) => l.sku === findCurrentLoadForPallet(loads, palletId)?.sku),

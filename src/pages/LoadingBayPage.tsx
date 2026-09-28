@@ -513,7 +513,7 @@ export function LoadingBayPage() {
                 <p className="text-sm text-slate-300">
                   Pallet <span className="font-mono font-semibold text-slate-100">{expectedId}</span>{' '}
                   {isDirect
-                    ? '— ⚡ scan to confirm arrival, then move direct to dispatch (no staging)'
+                    ? '— ⚡ direct-dispatch pallet: scan to confirm arrival. It goes to dispatch only if the Loader has released it; otherwise you\'ll be told which bay rack to store it in'
                     : 'from storage — scan to confirm arrival, then move to the correct rack destination'}
                 </p>
                 <ScanInput
@@ -530,7 +530,7 @@ export function LoadingBayPage() {
             <>
               <p className="text-sm text-slate-300">
                 {palletsAwaitingLineDeparture.length > 0
-                  ? `Expecting a Production Direct pallet — scan to confirm arrival straight from the line (no staging).`
+                  ? `Expecting a Production Direct pallet — scan to confirm its arrival from the line. It goes to dispatch only if the Loader has released it; otherwise it's stored in the bay.`
                   : 'No pallet currently expected here — scan a Production Direct pallet\'s barcode to confirm its arrival straight from the line. (A normal Storage pallet should be scanned at Storage instead.)'}
               </p>
               <ScanInput

@@ -195,7 +195,7 @@ export function ProductionPage() {
                         ⚡ Production Direct Dispatch Active
                       </p>
                       <p className="text-xs text-green-100">
-                        Next {totalPalletsRemaining} pallet{totalPalletsRemaining === 1 ? '' : 's'} will route directly to dispatch for:{' '}
+                        Next {totalPalletsRemaining} pallet{totalPalletsRemaining === 1 ? '' : 's'} will skip storage and go to the loading bay for:{' '}
                         {productionDirectApprovals.map((a) => `${a.salesOrderId} (${a.sku})`).join(', ')}
                       </p>
                     </div>
@@ -207,11 +207,12 @@ export function ProductionPage() {
               {lastPalletIsDirectDispatch && (
                 <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-4 text-sm">
                   <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
-                    ⚡ Move direct to dispatch
+                    ⚡ Move to the loading bay
                   </p>
                   <p className="text-xs text-green-100">
-                    Do not move this pallet to storage — a Loading Bay Picker will scan it leaving the line, then
-                    confirm arrival at the loading bay, then straight to dispatch.
+                    Do not move this pallet to storage — a Loading Bay Picker will scan it leaving the line and
+                    confirm arrival at the loading bay. It goes on to dispatch only if the Loader has released it;
+                    otherwise it's stored in the bay.
                   </p>
                 </div>
               )}

@@ -305,7 +305,17 @@ function selectReadyPalletsForLine(
   truckId: string,
   line: SalesOrderLine,
 ): { selected: Pallet[]; pickedQty: number } {
-  const linePallets = readyPallets.filter((p) => findCurrentLoadForPallet(state.loads, p.id)?.sku === line.sku);
+  // Ordinary bay stock (and pallets already staged for this truck) must
+  // claim the released budget before a direct-dispatch pallet gets a shot
+  // at it — otherwise a pallet the Loader never specifically released for
+  // can win the budget purely because of pallet-id ordering, shipping the
+  // wrong goods (the direct-dispatch pallet instead of the genuinely
+  // released bay stock) even though the total credited stays within
+  // budget. Array.prototype.sort is stable, so relative order within each
+  // group (e.g. FIFO among on-bay pallets) is preserved.
+  const linePallets = readyPallets
+    .filter((p) => findCurrentLoadForPallet(state.loads, p.id)?.sku === line.sku)
+    .sort((a, b) => Number(a.status === 'InTransitToTruck') - Number(b.status === 'InTransitToTruck'));
 
   const claimedByOtherOpenTrucks = state.dispatchVerifications
     .filter((v) => v.salesOrderId === salesOrderId && v.truckId !== truckId && !v.dispatchLineScannedAt)
@@ -385,10 +395,13 @@ function buildDispatchManifest(
   // could each select the very same physical pallet out of the shared
   // untagged pool. Exclude whatever another still-open (not yet scanned)
   // truck's verification has already claimed for this order.
+  // Only their live claim (activePalletIds), not their cumulative history —
+  // a pallet another truck already dispatched is freed and may since have
+  // been reloaded with new stock that's fair game here.
   const claimedPalletIdsByOtherTrucks = new Set(
     state.dispatchVerifications
       .filter((v) => v.salesOrderId === salesOrderId && v.truckId !== truckId && !v.dispatchLineScannedAt)
-      .flatMap((v) => v.palletIds),
+      .flatMap((v) => v.activePalletIds ?? v.palletIds),
   );
 
   // Find pallets that are either staged for dispatch, on bay, or in direct dispatch
@@ -468,7 +481,8 @@ function buildDispatchManifest(
   // the printed handover document and read by the audit trail (see
   // HandoverVerificationDocument, engine/audit.ts) and must never disappear
   // from the record once listed.
-  const palletIds = Array.from(new Set([...(existing?.palletIds ?? []), ...selectedPallets.map((p) => p.id)]));
+  const selectedPalletIds = selectedPallets.map((p) => p.id);
+  const palletIds = Array.from(new Set([...(existing?.palletIds ?? []), ...selectedPalletIds]));
   const pickedQty = products.reduce((sum, p) => sum + p.pickedQty, 0);
   const newUnitsCount = claimedReleaseIds.reduce(
     (sum, id) => sum + (state.salesOrderReleases.find((r) => r.id === id)?.qty ?? 0),
@@ -489,7 +503,14 @@ function buildDispatchManifest(
 
   const now = new Date().toISOString();
   const verification: DispatchVerification = existing
-    ? { ...existing, products, palletIds, latestReleaseProducts: latestReleaseProductsComputed, pickerUserIds }
+    ? {
+        ...existing,
+        products,
+        palletIds,
+        activePalletIds: selectedPalletIds,
+        latestReleaseProducts: latestReleaseProductsComputed,
+        pickerUserIds,
+      }
     : {
         id: generateVerificationId(),
         salesOrderId,
@@ -499,6 +520,7 @@ function buildDispatchManifest(
         customer: so.customer,
         products,
         palletIds,
+        activePalletIds: selectedPalletIds,
         latestReleaseProducts: latestReleaseProductsComputed,
         loaderUserId: allocation?.createdByUserId ?? null,
         pickerUserIds,
@@ -546,7 +568,11 @@ function findExcessDirectDispatchPalletIds(
     if (!truck) continue;
     const existing = state.dispatchVerifications.find((v) => v.salesOrderId === so.id && v.truckId === truckId);
     const built = buildDispatchManifest(state, so, truck, existing, 'system');
-    if (built) built.verification.palletIds.forEach((id) => claimedByAnyAssignedTruck.add(id));
+    // The fresh selection only — verification.palletIds is cumulative
+    // history, and a pallet freed by an earlier dispatch and reused for this
+    // very direct-dispatch load would otherwise count as "already has room"
+    // despite nothing having been released for it.
+    if (built) built.verification.activePalletIds?.forEach((id) => claimedByAnyAssignedTruck.add(id));
   }
 
   return state.pallets
@@ -1413,14 +1439,14 @@ export const useWarehouseStore = create<WarehouseState>()(
                 id: generateMovementId(),
                 palletId,
                 from: 'Line',
-                to: 'Dispatch (Production Direct)',
+                to: 'InTransit (Production Direct → Loading Bay)',
                 timestamp: new Date().toISOString(),
                 operatorId,
               },
             ],
           }));
           get().pushToast(
-            `Pallet ${palletId} routed directly to dispatch per Production Direct approval`,
+            `Pallet ${palletId} is Production Direct — take it to the loading bay and scan its arrival; it goes to dispatch only if the Loader has released it`,
             'success',
           );
           return ok(undefined);
@@ -2603,7 +2629,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           }));
           if (source === 'Production') {
             get().pushToast(
-              `Direct dispatch from Production topped up for ${salesOrderId} — ${merged.palletsRemaining} pallet${merged.palletsRemaining === 1 ? '' : 's'} off the line will now go straight to dispatch`,
+              `Direct dispatch from Production topped up for ${salesOrderId} — ${merged.palletsRemaining} pallet${merged.palletsRemaining === 1 ? '' : 's'} off the line will now skip storage for the loading bay`,
               'success',
             );
           } else {
@@ -2641,7 +2667,7 @@ export const useWarehouseStore = create<WarehouseState>()(
 
         if (source === 'Production') {
           get().pushToast(
-            `Direct dispatch from Production approved for ${salesOrderId} — the next ${approval.palletsRemaining} pallet${approval.palletsRemaining === 1 ? '' : 's'} off the line will go straight to dispatch`,
+            `Direct dispatch from Production approved for ${salesOrderId} — the next ${approval.palletsRemaining} pallet${approval.palletsRemaining === 1 ? '' : 's'} off the line will skip storage for the loading bay`,
             'success',
           );
           return ok({ approval });
@@ -2841,7 +2867,7 @@ export const useWarehouseStore = create<WarehouseState>()(
             ? state.dispatchVerifications.map((v) => (v.id === verification.id ? verification : v))
             : [...state.dispatchVerifications, verification],
           pallets: state.pallets.map((p) => {
-            if (verification.palletIds.includes(p.id) && p.status === 'InTransitToTruck') {
+            if (verification.activePalletIds?.includes(p.id) && p.status === 'InTransitToTruck') {
               return { ...p, status: 'StagedForDispatch', location: { type: 'DispatchLine', dispatchLine: truck.dispatchLine, truckId: truck.id } };
             }
             return p;
@@ -2939,7 +2965,12 @@ export const useWarehouseStore = create<WarehouseState>()(
           creditedQtyBySku[sku] = (creditedQtyBySku[sku] ?? 0) + delta;
         }
 
-        // This very scan is what moves refreshed.palletIds from
+        // Only this computation's fresh selection — refreshed.palletIds is
+        // cumulative history and can name a pallet that was freed by an
+        // earlier scan and has since been reloaded with unrelated stock.
+        const activePalletIds = refreshed.activePalletIds ?? [];
+
+        // This very scan is what moves activePalletIds from
         // InTransitToTruck to StagedForDispatch (see the `set()` below) —
         // compute that update up front so the readiness check below sees
         // pallets as they'll be AFTER this scan credits them, not as they
@@ -2947,7 +2978,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         // one scan that actually finishes a truck's direct-dispatch portion
         // could never itself be the one to flip the truck to 'Staged'.
         const palletsAfterThisScan = state.pallets.map((p) =>
-          refreshed.palletIds.includes(p.id) && p.status === 'InTransitToTruck'
+          activePalletIds.includes(p.id) && p.status === 'InTransitToTruck'
             ? {
                 ...p,
                 status: 'StagedForDispatch' as const,
@@ -2972,6 +3003,8 @@ export const useWarehouseStore = create<WarehouseState>()(
         const now = new Date().toISOString();
         const updated: DispatchVerification = {
           ...refreshed,
+          // Everything selected is credited and freed below — nothing left claimed.
+          activePalletIds: [],
           creditedQtyBySku,
           dispatchLineScannedAt: fullyReady ? now : null,
           dispatchLineScannedByUserId: fullyReady ? operatorId : null,
@@ -2988,11 +3021,11 @@ export const useWarehouseStore = create<WarehouseState>()(
         // portion is scanned, not only once every last one on the truck is.
         // Its Load record is marked 'Dispatched' so a later reuse's NEW Load
         // never gets shadowed by this stale one (see findCurrentLoadForPallet).
-        // Safe to free unconditionally: refreshed.palletIds only ever holds
-        // pallets currently contributing to this manifest — an already-freed
-        // ('Empty') pallet can never reappear there (computeReadyPalletsForTruck
-        // doesn't match 'Empty' pallets at all).
-        const palletIdsToFree = new Set(refreshed.palletIds);
+        // Safe to free unconditionally: activePalletIds only holds pallets
+        // this very computation selected, whose units are exactly the delta
+        // just credited — never the cumulative palletIds history, which can
+        // name a reused pallet now carrying unrelated stock.
+        const palletIdsToFree = new Set(activePalletIds);
         set((state) => ({
           dispatchVerifications: existingVerification
             ? state.dispatchVerifications.map((v) => (v.id === updated.id ? updated : v))

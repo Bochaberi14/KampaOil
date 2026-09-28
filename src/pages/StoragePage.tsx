@@ -84,6 +84,7 @@ export function StoragePage() {
           `⚡ Pallet ${palletId} is a direct-dispatch pallet already confirmed at the loading bay — do not rack it, take it straight to dispatch`,
           'error',
         );
+        setLastArrivedDirectDispatch(null);
       } else {
         pushToast(
           `⚡ Pallet ${palletId} is a direct-dispatch pallet — do not rack it, take it to the loading bay and scan its arrival there`,
@@ -100,12 +101,21 @@ export function StoragePage() {
       return;
     }
 
-    // Production Direct Dispatch: pallet is now InTransitToTruck — it skips
-    // storage and the bay entirely, heading straight toward dispatch, so
-    // don't send the picker into the rack-placement step.
+    // Production Direct Dispatch: pallet is now InTransitToTruck. Like a
+    // Storage-sourced direct-dispatch pallet, it skips rack/bay STAGING but
+    // must still get a dedicated arrival scan at the Loading Bay — that scan
+    // is what actually runs the loader-release gate
+    // (scanPalletArrivedForDirectDispatch, only callable from there). Don't
+    // resolve that here: doing so would (a) let the picker believe the
+    // pallet is fully handled before it has physically reached the bay, and
+    // (b) pull it out of the Loading Bay's "awaiting arrival" queue, so
+    // nothing there prompts anyone to actually do that scan.
     const updatedPallet = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
     if (updatedPallet?.status === 'InTransitToTruck') {
-      pushToast(`⚡ Pallet ${palletId} routed directly to dispatch — bypassing storage`, 'success');
+      pushToast(
+        `⚡ Pallet ${palletId} is a direct-dispatch pallet — take it to the loading bay and scan its arrival there`,
+        'success',
+      );
       setLastArrivedDirectDispatch(palletId);
       setWizard({ step: 'pallet-arriving', palletId: null });
       return;
@@ -223,11 +233,12 @@ export function StoragePage() {
             {lastArrivedDirectDispatch && (
               <div className="rounded-lg bg-green-900/20 border border-green-800/50 p-4 text-sm">
                 <p className="text-xs font-semibold uppercase tracking-wide text-green-300 mb-2">
-                  ⚡ Move direct to dispatch
+                  ⚡ Take to the loading bay
                 </p>
                 <p className="text-xs text-green-100">
                   Pallet <span className="font-mono font-semibold">{lastArrivedDirectDispatch}</span> is not going to a
-                  rack — take it to the loading bay, scan its arrival there, then straight to dispatch.
+                  rack — take it to the loading bay and scan its arrival there. It goes on to dispatch only if the
+                  Loader has released it; otherwise it's stored in the bay.
                 </p>
               </div>
             )}

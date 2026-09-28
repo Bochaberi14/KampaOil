@@ -502,10 +502,17 @@ export interface DispatchVerification {
   // Cumulative across every generation — the source of truth for dispatchedQty
   // math at scan time (see scanDispatchLine). Never trimmed down.
   products: DispatchVerificationProduct[];
-  // Kept for the underlying fulfillment math (see scanDispatchLine) and to
-  // decide which pallets get promoted to StagedForDispatch — not shown on
-  // the printed manifest, which deliberately stays to just Ordered/Released.
+  // Cumulative history of every pallet ever listed on this truck — shown on
+  // the handover document and read by the audit trail, never trimmed. NOT a
+  // live claim: pallets are a reused pool, so an id here may since have been
+  // freed and reloaded with unrelated stock. Use activePalletIds for any
+  // decision about what's currently going on this truck.
   palletIds: string[];
+  // Pallets the latest computation selected for this truck and that haven't
+  // been credited by a dispatch-line scan yet — the live claim. Emptied by
+  // scanDispatchLine once it credits and frees them. Absent on records
+  // persisted before this field existed.
+  activePalletIds?: string[];
   // What's newly released as of the *most recent* generation — driven by
   // actual SalesOrderRelease events (see generateManifestForPickingComplete),
   // not by pallet movement. Lets the default printed manifest show just the
