@@ -6,6 +6,7 @@ import { StatusPill } from '../components/StatusPill';
 import { TruckCard } from '../components/EntityCards';
 import { can } from '../rbac';
 import { USERS } from '../data/seed';
+import { findCurrentLoadForPallet } from '../types/domain';
 // Removed unused dispatch utility imports
 
 function userName(userId: string): string {
@@ -149,7 +150,7 @@ export function DispatchPage() {
         .filter((p) => p.status === 'InTransitToTruck')
         .map((p) => p.id)
         .filter((palletId) =>
-          selectedSO.lines.some((l) => l.sku === loads.find((ld) => ld.palletId === palletId)?.sku),
+          selectedSO.lines.some((l) => l.sku === findCurrentLoadForPallet(loads, palletId)?.sku),
         )
     : [];
 

@@ -6,6 +6,7 @@ import { RackGrid } from '../components/RackGrid';
 import { stageLabel } from '../engine/rules';
 import { can, canAccessDepartment } from '../rbac';
 import { PRODUCTS } from '../data/products';
+import { findCurrentLoadForPallet } from '../types/domain';
 
 const HOLD_REASONS = [
   'Quality defects',
@@ -149,7 +150,7 @@ export function HoldPage() {
     const pallet = pallets.find((p) => hold.targetType === 'Pallet' && p.id === hold.targetId);
     if (!pallet) return true; // If pallet not found, allow access
 
-    const load = loads.find((l) => l.palletId === pallet.id);
+    const load = findCurrentLoadForPallet(loads, pallet.id);
     if (!load) return true; // If load not found, allow access
 
     const product = PRODUCTS.find((p) => p.sku === load.sku);

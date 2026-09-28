@@ -11,6 +11,7 @@ import {
 } from '../components/InventoryReportPrint';
 import { can } from '../rbac';
 import type { Zone, Load, Shelf, Rack } from '../types/domain';
+import { findCurrentLoadForPallet } from '../types/domain';
 
 export function ZoneInventoryPage() {
   const pallets = useWarehouseStore((s) => s.pallets);
@@ -44,7 +45,10 @@ export function ZoneInventoryPage() {
 
     const zonePallets = pallets.filter((p) => palletIds.has(p.id));
     const zoneLoads = zonePallets
-      .flatMap((p) => loads.filter((l) => l.palletId === p.id))
+      .flatMap((p) => {
+        const load = findCurrentLoadForPallet(loads, p.id);
+        return load ? [load] : [];
+      })
       .reduce((acc, load) => {
         const existing = acc.find((a) => a.sku === load.sku);
         if (existing) {

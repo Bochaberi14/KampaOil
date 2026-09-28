@@ -7,6 +7,7 @@ import { isDemoMode } from '../demoMode';
 import { recommendBayLocation, formatBayLocation } from '../engine/storageRecommendation';
 import { PRODUCTS } from '../data/products';
 import { LOADING_BAY_ZONES, LOADING_BAY_SHELVES } from '../data/seed';
+import { findCurrentLoadForPallet } from '../types/domain';
 
 type WizardStep = 'bay-arriving' | 'bay-staging';
 type DispatchStep = 'scan-pallet';
@@ -83,7 +84,7 @@ export function LoadingBayPage() {
         if (reserved.has(pId)) return false;
         const pallet = pallets.find((p) => p.id === pId);
         if (pallet?.holdId) return false;
-        const load = loads.find((l) => l.palletId === pId);
+        const load = findCurrentLoadForPallet(loads, pId);
         return load?.sku === product.sku;
       }).length;
       inv[product.sku] = { sku: product.sku, name: product.name, count };
@@ -99,7 +100,7 @@ export function LoadingBayPage() {
         .filter((s) => s.palletId)
         .map((s) => s.palletId!) as string[];
       const count = palletIds.filter((pId) => {
-        const load = loads.find((l) => l.palletId === pId);
+        const load = findCurrentLoadForPallet(loads, pId);
         return load?.sku === product.sku;
       }).length;
       inv[product.sku] = { sku: product.sku, name: product.name, count };
@@ -226,7 +227,7 @@ export function LoadingBayPage() {
 
     const pallet = pallets.find((p) => p.id === wizard.palletId);
     if (!pallet) return;
-    const palletSku = loads.find((l) => l.palletId === wizard.palletId)?.sku ?? '';
+    const palletSku = findCurrentLoadForPallet(loads, wizard.palletId ?? '')?.sku ?? '';
 
     // Get recommended bay location for this pallet
     const freshRecommendation = recommendBayLocation(bayRacks, palletSku, wizard.palletId, pallets);
@@ -533,7 +534,7 @@ export function LoadingBayPage() {
 
           {wizard.step === 'bay-staging' && wizard.palletId && (() => {
             const pallet = pallets.find((p) => p.id === wizard.palletId);
-            const palletSku = loads.find((l) => l.palletId === wizard.palletId)?.sku ?? '';
+            const palletSku = findCurrentLoadForPallet(loads, wizard.palletId ?? '')?.sku ?? '';
             const freshRecommendation = pallet ? recommendBayLocation(bayRacks, palletSku, wizard.palletId, pallets) : null;
             return (
               <>

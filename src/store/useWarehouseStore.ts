@@ -33,7 +33,7 @@ import type {
   User,
   Zone,
 } from '../types/domain';
-import { computeSalesOrderStatus } from '../types/domain';
+import { computeSalesOrderStatus, findCurrentLoadForPallet } from '../types/domain';
 import {
   EXCEPTION_LINE_ID,
   INITIAL_BATCHES,
@@ -172,13 +172,17 @@ function selectFifoBayPickItems(
   // twice before either is executed.
   const reserved = reservedPalletIds(state.pickTasks);
 
-  // Get loads for bay pallets that match the SKU, maintain FIFO order
+  // Get loads for bay pallets that match the SKU, maintain FIFO order. A
+  // pallet reused after an earlier dispatch can carry more than one Load
+  // record over its lifetime — only its CURRENT one is real stock; an older
+  // 'Dispatched' Load for the same (reused) pallet id must be excluded.
   const candidates = state.loads.filter((l) => {
     // Must be a pallet physically in a bay rack
     if (!bayPalletMap.has(l.palletId)) return false;
     // Must match the SKU
     if (l.sku !== sku) return false;
     if (reserved.has(l.palletId)) return false;
+    if (findCurrentLoadForPallet(state.loads, l.palletId)?.id !== l.id) return false;
     return true;
   });
 
@@ -258,7 +262,7 @@ function computeReadyPalletsForTruck(
 ): Pallet[] {
   return state.pallets.filter((p) => {
     if (claimedPalletIdsByOtherTrucks.has(p.id)) return false;
-    const load = state.loads.find((l) => l.palletId === p.id);
+    const load = findCurrentLoadForPallet(state.loads, p.id);
     if (!load || !so.lines.some((l) => l.sku === load.sku)) return false;
 
     // Include staged pallets for this truck
@@ -281,15 +285,16 @@ function computeReadyPalletsForTruck(
 // ready pallets fill it. Also split out of buildDispatchManifest purely for
 // readability.
 //
-// This runs fresh on every scan, and `readyPallets` includes pallets already
-// StagedForDispatch for THIS truck from an earlier successful scan — their
-// quantity is already reflected in `line.dispatchedQty` (credited last time).
-// They must stay in `selected`/`pickedQty` so the manifest/verification still
-// lists them, but they must NOT walk against `remainingQty` again — doing so
-// re-spends a budget that already shrank (releasedQty - dispatchedQty) on
-// stock that's already accounted for, which can exhaust it before a
-// genuinely new pallet (arrived after that first scan) ever gets a turn,
-// even when there's real released headroom left for it.
+// `readyPallets` only ever holds pallets not yet reflected in
+// `line.dispatchedQty` — a pallet is freed to 'Empty' the instant its scan
+// credits it (see scanDispatchLine), so it drops out of readyPallets on every
+// later recompute and can never be walked twice. That's what keeps this a
+// single, plain walk against the live remaining budget: nothing here needs
+// to special-case "already staged" pallets or exempt them from the budget —
+// they're simply gone once truly credited, and a still-StagedForDispatch
+// pallet queued via generateManifestForPickingComplete but not yet scanned
+// competes for the budget exactly like anything else, which is correct
+// (it hasn't actually been credited yet, so it must not skip the cap).
 function selectReadyPalletsForLine(
   state: Pick<WarehouseState, 'loads' | 'dispatchVerifications'>,
   readyPallets: Pallet[],
@@ -297,11 +302,7 @@ function selectReadyPalletsForLine(
   truckId: string,
   line: SalesOrderLine,
 ): { selected: Pallet[]; pickedQty: number } {
-  const linePallets = readyPallets.filter((p) => state.loads.find((l) => l.palletId === p.id)?.sku === line.sku);
-  const alreadyStagedForThisTruck = linePallets.filter(
-    (p) => p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine' && p.location.truckId === truckId,
-  );
-  const notYetStaged = linePallets.filter((p) => !alreadyStagedForThisTruck.includes(p));
+  const linePallets = readyPallets.filter((p) => findCurrentLoadForPallet(state.loads, p.id)?.sku === line.sku);
 
   const claimedByOtherOpenTrucks = state.dispatchVerifications
     .filter((v) => v.salesOrderId === salesOrderId && v.truckId !== truckId && !v.dispatchLineScannedAt)
@@ -310,17 +311,17 @@ function selectReadyPalletsForLine(
     .reduce((sum, p) => sum + p.pickedQty, 0);
   let remainingQty = Math.max(0, line.releasedQty - line.dispatchedQty - claimedByOtherOpenTrucks);
 
-  const selected: Pallet[] = [...alreadyStagedForThisTruck];
-  for (const p of notYetStaged) {
+  const selected: Pallet[] = [];
+  for (const p of linePallets) {
     if (remainingQty <= 0) break;
-    const load = state.loads.find((l) => l.palletId === p.id);
+    const load = findCurrentLoadForPallet(state.loads, p.id);
     if (load) {
       selected.push(p);
       remainingQty -= load.quantity;
     }
   }
   const pickedQty = selected.reduce(
-    (sum, p) => sum + (state.loads.find((l) => l.palletId === p.id)?.quantity ?? 0),
+    (sum, p) => sum + (findCurrentLoadForPallet(state.loads, p.id)?.quantity ?? 0),
     0,
   );
   return { selected, pickedQty };
@@ -390,7 +391,14 @@ function buildDispatchManifest(
   // Find pallets that are either staged for dispatch, on bay, or in direct dispatch
   const readyPallets = computeReadyPalletsForTruck(state, so, truckId, claimedPalletIdsByOtherTrucks);
 
-  if (readyPallets.length === 0) return null;
+  // Pallets already credited get freed to 'Empty' immediately (see
+  // scanDispatchLine) rather than waiting for the whole truck to close, so
+  // once everything ready so far has been credited-and-freed, readyPallets
+  // can legitimately be empty even though this truck already has real
+  // history and may still be open (e.g. waiting on an unrelated task). Only
+  // bail out with "nothing has ever been staged" when there's truly no
+  // verification yet to fall back on.
+  if (readyPallets.length === 0 && !existing) return null;
 
   // Only include up to each line's released quantity, walked separately per
   // SKU so one line's pallets can't eat into another line's share.
@@ -400,7 +408,7 @@ function buildDispatchManifest(
   const claimedReleaseIds: string[] = [];
   let anyNewRelease = false;
   for (const line of so.lines) {
-    const { selected: lineSelected, pickedQty: linePickedQty } = selectReadyPalletsForLine(
+    const { selected: lineSelected, pickedQty: freshPickedQty } = selectReadyPalletsForLine(
       state,
       readyPallets,
       salesOrderId,
@@ -408,6 +416,14 @@ function buildDispatchManifest(
       line,
     );
     selectedPallets.push(...lineSelected);
+    // Pallets already credited on an earlier scan are freed to 'Empty' right
+    // away (see scanDispatchLine), so readyPallets (and freshPickedQty)
+    // never includes them again — this is additive, not a re-total: the
+    // already-credited amount plus whatever newly-ready stock this specific
+    // computation just found. (Safe because credit and free always happen
+    // in the same scanDispatchLine commit — nothing can be reflected in
+    // creditedQtyBySku while its pallet is still sitting in readyPallets.)
+    const linePickedQty = (existing?.creditedQtyBySku?.[line.sku] ?? 0) + freshPickedQty;
     if (line.releasedQty > 0 || linePickedQty > 0) {
       products.push({
         sku: line.sku,
@@ -443,7 +459,13 @@ function buildDispatchManifest(
     }
   }
 
-  const palletIds = selectedPallets.map((p) => p.id);
+  // Cumulative, like `products` — a pallet credited on an earlier scan is
+  // freed to 'Empty' right away (see scanDispatchLine) and so drops out of
+  // `selectedPallets` on this and every later recompute, but it's shown on
+  // the printed handover document and read by the audit trail (see
+  // HandoverVerificationDocument, engine/audit.ts) and must never disappear
+  // from the record once listed.
+  const palletIds = Array.from(new Set([...(existing?.palletIds ?? []), ...selectedPallets.map((p) => p.id)]));
   const pickedQty = products.reduce((sum, p) => sum + p.pickedQty, 0);
   const newUnitsCount = claimedReleaseIds.reduce(
     (sum, id) => sum + (state.salesOrderReleases.find((r) => r.id === id)?.qty ?? 0),
@@ -1447,7 +1469,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           .flatMap((t) => t.items)
           .filter((i) => i.sku === line.sku)
           .reduce((sum, i) => {
-            const load = state.loads.find((l) => l.palletId === i.palletId);
+            const load = findCurrentLoadForPallet(state.loads, i.palletId);
             return load && load.status === 'InStorage' ? sum + i.quantity : sum;
           }, 0);
         const availableToAssign = line.releasedQty - line.dispatchedQty - committedQty;
@@ -1851,7 +1873,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           return (
             sum +
             palletIds.reduce((slotSum, palletId) => {
-              const load = state.loads.find((l) => l.palletId === palletId);
+              const load = findCurrentLoadForPallet(state.loads, palletId);
               return load && load.sku === line.sku ? slotSum + load.quantity : slotSum;
             }, 0)
           );
@@ -1925,7 +1947,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const inStorageQty = state.racks.reduce((sum, r) => {
           const palletIds = r.slots.filter((s) => s.palletId).map((s) => s.palletId!) as string[];
           return sum + palletIds.reduce((slotSum, pId) => {
-            const load = state.loads.find((l) => l.palletId === pId);
+            const load = findCurrentLoadForPallet(state.loads, pId);
             return load && load.sku === line.sku ? slotSum + load.quantity : slotSum;
           }, 0);
         }, 0);
@@ -2061,7 +2083,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           return (
             sum +
             palletIds.reduce((slotSum, palletId) => {
-              const load = state.loads.find((l) => l.palletId === palletId);
+              const load = findCurrentLoadForPallet(state.loads, palletId);
               return slotSum + (load && load.sku === sku ? load.quantity : 0);
             }, 0)
           );
@@ -2075,7 +2097,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         return state.pallets
           .filter((p) => p.status === 'Racked' && !p.holdId && !reserved.has(p.id))
           .reduce((sum, pallet) => {
-            const load = state.loads.find((l) => l.palletId === pallet.id);
+            const load = findCurrentLoadForPallet(state.loads, pallet.id);
             return sum + (load && load.sku === sku ? load.quantity : 0);
           }, 0);
       },
@@ -2086,7 +2108,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         return state.pallets
           .filter((p) => p.status === 'Loaded')
           .reduce((sum, pallet) => {
-            const load = state.loads.find((l) => l.palletId === pallet.id);
+            const load = findCurrentLoadForPallet(state.loads, pallet.id);
             return sum + (load && load.sku === sku ? load.quantity : 0);
           }, 0);
       },
@@ -2724,11 +2746,53 @@ export const useWarehouseStore = create<WarehouseState>()(
           dispatchLineScannedAt: fullyReady ? now : null,
           dispatchLineScannedByUserId: fullyReady ? operatorId : null,
         };
+        // Pallets are a fixed, reused pool (see confirmLoad) — the wooden
+        // pallet itself never leaves with the truck (domain.ts's
+        // PalletLocation 'DispatchLine' comment: "the pallet itself is never
+        // considered 'in' the truck"), only the product does. So the moment
+        // THIS scan actually credits something (totalDelta > 0, already
+        // checked above), every pallet it just confirmed goes straight back
+        // to 'Empty'/FreePool, ready for a new load — independent of whether
+        // the whole truck (fullyReady) is done. A truck can span several
+        // pickers/tasks; each one's own pallets free up as soon as their own
+        // portion is scanned, not only once every last one on the truck is.
+        // Its Load record is marked 'Dispatched' so a later reuse's NEW Load
+        // never gets shadowed by this stale one (see findCurrentLoadForPallet).
+        // Safe to free unconditionally: refreshed.palletIds only ever holds
+        // pallets currently contributing to this manifest — an already-freed
+        // ('Empty') pallet can never reappear there (computeReadyPalletsForTruck
+        // doesn't match 'Empty' pallets at all).
+        const palletIdsToFree = new Set(refreshed.palletIds);
         set((state) => ({
           dispatchVerifications: existingVerification
             ? state.dispatchVerifications.map((v) => (v.id === updated.id ? updated : v))
             : [...state.dispatchVerifications, updated],
-          pallets: palletsAfterThisScan,
+          pallets:
+            palletIdsToFree.size > 0
+              ? palletsAfterThisScan.map((p) =>
+                  palletIdsToFree.has(p.id)
+                    ? {
+                        ...p,
+                        status: 'Empty' as const,
+                        location: { type: 'FreePool' as const },
+                        loadId: null,
+                        holdId: null,
+                        directDispatchArrivedAt: undefined,
+                        productionDirectDispatchApprovalId: undefined,
+                        recommendedStorageLocation: undefined,
+                        recommendedBayLocation: undefined,
+                      }
+                    : p,
+                )
+              : palletsAfterThisScan,
+          loads:
+            palletIdsToFree.size > 0
+              ? state.loads.map((l) =>
+                  palletIdsToFree.has(l.palletId) && findCurrentLoadForPallet(state.loads, l.palletId)?.id === l.id
+                    ? { ...l, status: 'Dispatched' as const }
+                    : l,
+                )
+              : state.loads,
           salesOrderReleases: claimedReleaseIds.length
             ? state.salesOrderReleases.map((r) =>
                 claimedReleaseIds.includes(r.id) ? { ...r, includedInDocument: true } : r,
@@ -3054,7 +3118,7 @@ export const useWarehouseStore = create<WarehouseState>()(
         const pallet = state.pallets.find((p) => p.id === hold.targetId);
         if (!pallet) return err(`Pallet "${hold.targetId}" not found`);
         if (pallet.holdId !== hold.id) return err(`Pallet ${hold.targetId} does not match this hold`);
-        const load = state.loads.find((l) => l.palletId === pallet.id);
+        const load = findCurrentLoadForPallet(state.loads, pallet.id);
         if (!load) return err('Load record not found for this pallet');
 
         // A held pallet can be anywhere in the workflow now — vacate whatever
@@ -3255,7 +3319,9 @@ export const useWarehouseStore = create<WarehouseState>()(
             // Recalled stock rejoins FIFO at the back of the queue — the
             // original batch is what triggered the hold, so it shouldn't jump
             // ahead of untouched stock just because it was produced earlier.
-            loads: state.loads.map((l) => (l.palletId === recallCase.palletId ? { ...l, producedAt: now } : l)),
+            loads: state.loads.map((l) =>
+              l.id === findCurrentLoadForPallet(state.loads, recallCase.palletId)?.id ? { ...l, producedAt: now } : l,
+            ),
             recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
             holds: state.holds.map((h) => (h.id === recallCase.holdId ? { ...h, status: 'Released' as const } : h)),
             movements: [
@@ -3306,7 +3372,9 @@ export const useWarehouseStore = create<WarehouseState>()(
             p.id === recallCase.palletId ? { ...p, status: 'Scrapped', location: { type: 'Scrapped' } } : p,
           ),
           loads: state.loads.map((l) =>
-            l.palletId === recallCase.palletId ? { ...l, status: 'Disposed' as const } : l,
+            l.id === findCurrentLoadForPallet(state.loads, recallCase.palletId)?.id
+              ? { ...l, status: 'Disposed' as const }
+              : l,
           ),
           recallCases: state.recallCases.map((r) => (r.id === recallCaseId ? updated : r)),
           holds: state.holds.map((h) => (h.id === recallCase.holdId ? { ...h, status: 'Released' as const } : h)),

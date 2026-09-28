@@ -7,6 +7,7 @@ import { recommendStorageLocation, formatStorageLocation } from '../engine/stora
 import { STORAGE_ZONES } from '../data/seed';
 import { canAccessDepartment, isPickerLocationMatch } from '../rbac';
 import { isDemoMode } from '../demoMode';
+import { findCurrentLoadForPallet } from '../types/domain';
 
 type WizardStep = 'pallet-arriving' | 'rack-placement';
 type PickingStep = 'pallet-at-rack' | 'rack-scan';
@@ -119,7 +120,7 @@ export function StoragePage() {
     const pallet = pallets.find((p) => p.id === wizard.palletId);
     if (!pallet) return;
 
-    const load = loads.find((l) => l.palletId === wizard.palletId);
+    const load = findCurrentLoadForPallet(loads, wizard.palletId);
     if (!load) return;
 
     const freshRecommendation = recommendStorageLocation(racks, load.sku, wizard.palletId, pallets);
@@ -244,7 +245,7 @@ export function StoragePage() {
 
         {wizard.step === 'rack-placement' &&
           (() => {
-            const load = loads.find((l) => l.palletId === wizard.palletId);
+            const load = findCurrentLoadForPallet(loads, wizard.palletId ?? '');
             const freshRecommendation = load && wizard.palletId ? recommendStorageLocation(racks, load.sku, wizard.palletId, pallets) : null;
             return (
               <>

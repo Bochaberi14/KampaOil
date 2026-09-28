@@ -1,4 +1,5 @@
 import type { Load, Rack } from '../types/domain';
+import { findCurrentLoadForPallet } from '../types/domain';
 
 export function RackGrid({
   rack,
@@ -23,9 +24,7 @@ export function RackGrid({
       <div className="grid grid-cols-3 gap-2">
         {rack.slots.map((slot) => {
           const held = !!slot.palletId && heldPalletIds?.includes(slot.palletId);
-          const load = slot.palletId
-            ? loads?.find((l) => l.palletId === slot.palletId)
-            : undefined;
+          const load = slot.palletId && loads ? findCurrentLoadForPallet(loads, slot.palletId) : undefined;
           const title = slot.palletId
             ? `${slot.palletId}${load ? ` — ${load.productName} — ${load.quantity.toLocaleString()} units` : ''}${held ? ' — on hold' : ''}`
             : undefined;

@@ -1,4 +1,5 @@
 import type { Zone, Shelf, Rack, Load } from '../types/domain';
+import { findCurrentLoadForPallet } from '../types/domain';
 import { binLabelForZoneId } from '../data/seed';
 
 interface InventoryReportPrintProps {
@@ -174,7 +175,7 @@ function RackTable({
       <tbody>
         {racks.flatMap((rack) =>
           rack.slots.map((slot) => {
-            const load = slot.palletId ? loads.find((l) => l.palletId === slot.palletId) : undefined;
+            const load = slot.palletId ? findCurrentLoadForPallet(loads, slot.palletId) : undefined;
             return (
               <tr key={`${rack.id}-${slot.index}`} className="border-b border-gray-300">
                 <td className="py-1 pr-2 font-mono">{rack.id}</td>

@@ -218,6 +218,21 @@ export interface Load {
   status: 'InStorage' | 'Dispatched' | 'Disposed';
 }
 
+// Pallets are a fixed, reused pool (see confirmLoad/scanDispatchLine) — once
+// a pallet's product is fully dispatched it's reset to 'Empty' and can carry
+// a brand-new Load later, so more than one Load can share the same
+// `palletId` over the pallet's lifetime. Always resolve through this rather
+// than `loads.find(l => l.palletId === id)`, which returns the OLDEST match
+// (array order) — for a reused pallet that's the stale, already-dispatched
+// load, not the current one. Loads are only ever appended, so the current
+// one (if any) is always the last match.
+export function findCurrentLoadForPallet(loads: Load[], palletId: string): Load | undefined {
+  for (let i = loads.length - 1; i >= 0; i--) {
+    if (loads[i].palletId === palletId) return loads[i];
+  }
+  return undefined;
+}
+
 export interface RackSlot {
   index: number;
   palletId: string | null;

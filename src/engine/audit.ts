@@ -1,4 +1,5 @@
 import type { Batch, HoldRecord, Load, Manifest, Movement, Pallet, Rack, RecallCase, DispatchVerification } from '../types/domain';
+import { findCurrentLoadForPallet } from '../types/domain';
 import { formatBayLocation, formatStorageLocation } from './storageRecommendation';
 
 export interface ScannerOperation {
@@ -13,8 +14,10 @@ export interface ScannerOperation {
 }
 
 export function getRackedLoads(loads: Load[], pallets: Pallet[]): Load[] {
-  const rackedIds = new Set(pallets.filter((p) => p.status === 'Racked').map((p) => p.id));
-  return loads.filter((l) => rackedIds.has(l.palletId));
+  const rackedIds = pallets.filter((p) => p.status === 'Racked').map((p) => p.id);
+  return rackedIds
+    .map((id) => findCurrentLoadForPallet(loads, id))
+    .filter((l): l is Load => !!l);
 }
 
 export interface GroupSummary {
@@ -74,7 +77,7 @@ export function buildPalletJourney(
 ): PalletJourney | null {
   const pallet = data.pallets.find((p) => p.id === palletId);
   if (!pallet) return null;
-  const load = data.loads.find((l) => l.palletId === palletId) ?? null;
+  const load = findCurrentLoadForPallet(data.loads, palletId) ?? null;
   const batch = load ? (data.batches.find((b) => b.id === load.batchId) ?? null) : null;
   const holds = data.holds.filter((h) => h.targetId === palletId);
   const recallCase = data.recallCases.find((r) => r.palletId === palletId) ?? null;
