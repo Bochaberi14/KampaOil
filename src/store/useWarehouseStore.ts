@@ -2936,27 +2936,48 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         const { verification: refreshed, claimedReleaseIds } = built;
 
-        // Credit only what's newly ready since the last scan (per sku) — the
+        // The fresh selection splits in two. Pallets physically at the
+        // dispatch line — scanned leaving the bay (StagedForDispatch via
+        // executeDispatchPicking) or a direct-dispatch pallet whose bay
+        // arrival is confirmed — are what this scan credits. Pallets still
+        // sitting 'OnBay' only *reserve* their share of the released budget
+        // (so a direct-dispatch pallet can't take it — see
+        // selectReadyPalletsForLine); they haven't left the bay, so crediting
+        // them here would fulfil the order while the goods are still on the
+        // rack. They stay claimed until a later scan, after they've left.
+        // (Only the fresh selection — refreshed.palletIds is cumulative
+        // history and can name a pallet that was freed by an earlier scan and
+        // has since been reloaded with unrelated stock.)
+        const selectedPalletIds = refreshed.activePalletIds ?? [];
+        const isAtDispatchLine = (id: string) => {
+          const p = state.pallets.find((pp) => pp.id === id);
+          return (
+            p?.status === 'StagedForDispatch' || (p?.status === 'InTransitToTruck' && !!p.directDispatchArrivedAt)
+          );
+        };
+        const activePalletIds = selectedPalletIds.filter(isAtDispatchLine);
+        const stillInBayPalletIds = selectedPalletIds.filter((id) => !isAtDispatchLine(id));
+
+        // Credit exactly the units on the pallets physically here — the
         // actual mechanism that lets one picker finishing their own task
         // scan and move on to other work without waiting on every other
-        // picker assigned to this same truck. Monotonic because a pallet,
-        // once ready, is never un-readied — so this is always >= 0 and never
-        // double-credits units an earlier scan already covered.
+        // picker assigned to this same truck. Never double-credits: every
+        // credited pallet is freed below and so can't be selected again.
         const creditedSoFar = existingVerification?.creditedQtyBySku ?? {};
         const deltaBySku: Record<string, number> = {};
         let totalDelta = 0;
-        for (const product of refreshed.products) {
-          const already = creditedSoFar[product.sku] ?? 0;
-          const delta = Math.max(0, product.pickedQty - already);
-          if (delta > 0) {
-            deltaBySku[product.sku] = delta;
-            totalDelta += delta;
-          }
+        for (const id of activePalletIds) {
+          const load = findCurrentLoadForPallet(state.loads, id);
+          if (!load) continue;
+          deltaBySku[load.sku] = (deltaBySku[load.sku] ?? 0) + load.quantity;
+          totalDelta += load.quantity;
         }
 
         if (totalDelta <= 0) {
           return err(
-            `Nothing new is ready to dispatch on ${truck.dispatchLine} yet — still waiting on picking for ${salesOrderId}`,
+            stillInBayPalletIds.length > 0
+              ? `${stillInBayPalletIds.length} pallet(s) for ${salesOrderId} are still in the loading bay — scan them leaving the bay before scanning the dispatch line`
+              : `Nothing new is ready to dispatch on ${truck.dispatchLine} yet — still waiting on picking for ${salesOrderId}`,
           );
         }
 
@@ -2964,11 +2985,6 @@ export const useWarehouseStore = create<WarehouseState>()(
         for (const [sku, delta] of Object.entries(deltaBySku)) {
           creditedQtyBySku[sku] = (creditedQtyBySku[sku] ?? 0) + delta;
         }
-
-        // Only this computation's fresh selection — refreshed.palletIds is
-        // cumulative history and can name a pallet that was freed by an
-        // earlier scan and has since been reloaded with unrelated stock.
-        const activePalletIds = refreshed.activePalletIds ?? [];
 
         // This very scan is what moves activePalletIds from
         // InTransitToTruck to StagedForDispatch (see the `set()` below) —
@@ -2991,20 +3007,27 @@ export const useWarehouseStore = create<WarehouseState>()(
         // credit — once every task/approval feeding its manifest has
         // actually arrived. Otherwise leave it open so the next picker who
         // finishes their own task can scan in their portion too.
-        const fullyReady = truckDispatchFullyReady(
-          state.pickTasks,
-          palletsAfterThisScan,
-          state.directDispatchApprovals,
-          salesOrderId,
-          truck.id,
-          refreshed,
-        );
+        // A selected pallet still in the bay also keeps the truck open, even
+        // with no dispatch picking task assigned for it yet.
+        const fullyReady =
+          stillInBayPalletIds.length === 0 &&
+          truckDispatchFullyReady(
+            state.pickTasks,
+            palletsAfterThisScan,
+            state.directDispatchApprovals,
+            salesOrderId,
+            truck.id,
+            refreshed,
+          );
 
         const now = new Date().toISOString();
         const updated: DispatchVerification = {
           ...refreshed,
-          // Everything selected is credited and freed below — nothing left claimed.
-          activePalletIds: [],
+          // Picked on the handover record = what has actually been credited,
+          // not what's merely reserved in the bay.
+          products: refreshed.products.map((p) => ({ ...p, pickedQty: creditedQtyBySku[p.sku] ?? 0 })),
+          // What's credited is freed below; pallets still in the bay stay claimed.
+          activePalletIds: stillInBayPalletIds,
           creditedQtyBySku,
           dispatchLineScannedAt: fullyReady ? now : null,
           dispatchLineScannedByUserId: fullyReady ? operatorId : null,
