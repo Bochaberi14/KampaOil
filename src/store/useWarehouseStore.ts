@@ -21,6 +21,7 @@ import type {
   RecallCase,
   RecallStageName,
   SalesOrder,
+  SalesOrderLine,
   SalesOrderRelease,
   Scanner,
   ScannerConfigChange,
@@ -245,6 +246,110 @@ function nextPendingStorageTaskFor(pickTasks: PickTask[], picker: User): PickTas
   return candidates[0] ?? null;
 }
 
+// Pallets physically ready to leave for this truck's sales order — staged at
+// its dispatch line already, sitting OnBay, or a direct-dispatch pallet whose
+// bay arrival is confirmed. Split out of buildDispatchManifest below purely
+// for readability; not shared elsewhere.
+function computeReadyPalletsForTruck(
+  state: Pick<WarehouseState, 'pallets' | 'loads'>,
+  so: SalesOrder,
+  truckId: string,
+  claimedPalletIdsByOtherTrucks: Set<string>,
+): Pallet[] {
+  return state.pallets.filter((p) => {
+    if (claimedPalletIdsByOtherTrucks.has(p.id)) return false;
+    const load = state.loads.find((l) => l.palletId === p.id);
+    if (!load || !so.lines.some((l) => l.sku === load.sku)) return false;
+
+    // Include staged pallets for this truck
+    if (p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine') {
+      return (p.location as { truckId: string }).truckId === truckId;
+    }
+
+    // Include on-bay pallets that haven't been assigned to another truck yet
+    if (p.status === 'OnBay') return true;
+
+    // Direct dispatch pallets (bypassing bay staging) only count as ready
+    // once the picker has confirmed physical arrival at the loading bay
+    if (p.status === 'InTransitToTruck') return !!p.directDispatchArrivedAt;
+
+    return false;
+  });
+}
+
+// How much of `line` a truck can still be credited for right now, and which
+// ready pallets fill it. Also split out of buildDispatchManifest purely for
+// readability.
+//
+// This runs fresh on every scan, and `readyPallets` includes pallets already
+// StagedForDispatch for THIS truck from an earlier successful scan — their
+// quantity is already reflected in `line.dispatchedQty` (credited last time).
+// They must stay in `selected`/`pickedQty` so the manifest/verification still
+// lists them, but they must NOT walk against `remainingQty` again — doing so
+// re-spends a budget that already shrank (releasedQty - dispatchedQty) on
+// stock that's already accounted for, which can exhaust it before a
+// genuinely new pallet (arrived after that first scan) ever gets a turn,
+// even when there's real released headroom left for it.
+function selectReadyPalletsForLine(
+  state: Pick<WarehouseState, 'loads' | 'dispatchVerifications'>,
+  readyPallets: Pallet[],
+  salesOrderId: string,
+  truckId: string,
+  line: SalesOrderLine,
+): { selected: Pallet[]; pickedQty: number } {
+  const linePallets = readyPallets.filter((p) => state.loads.find((l) => l.palletId === p.id)?.sku === line.sku);
+  const alreadyStagedForThisTruck = linePallets.filter(
+    (p) => p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine' && p.location.truckId === truckId,
+  );
+  const notYetStaged = linePallets.filter((p) => !alreadyStagedForThisTruck.includes(p));
+
+  const claimedByOtherOpenTrucks = state.dispatchVerifications
+    .filter((v) => v.salesOrderId === salesOrderId && v.truckId !== truckId && !v.dispatchLineScannedAt)
+    .flatMap((v) => v.products)
+    .filter((p) => p.sku === line.sku)
+    .reduce((sum, p) => sum + p.pickedQty, 0);
+  let remainingQty = Math.max(0, line.releasedQty - line.dispatchedQty - claimedByOtherOpenTrucks);
+
+  const selected: Pallet[] = [...alreadyStagedForThisTruck];
+  for (const p of notYetStaged) {
+    if (remainingQty <= 0) break;
+    const load = state.loads.find((l) => l.palletId === p.id);
+    if (load) {
+      selected.push(p);
+      remainingQty -= load.quantity;
+    }
+  }
+  const pickedQty = selected.reduce(
+    (sum, p) => sum + (state.loads.find((l) => l.palletId === p.id)?.quantity ?? 0),
+    0,
+  );
+  return { selected, pickedQty };
+}
+
+// Which sales order a direct-dispatch pallet belongs to, from the pallet's
+// own origin — never a bare SKU match, which could resolve to a completely
+// different order that happens to share the SKU. Production pallets carry
+// this decision directly (productionDirectDispatchApprovalId, set once at
+// confirmLoad); Storage pallets don't, but the PickTask that released them
+// does (salesOrderId). Used only for the display hint below (which truck to
+// suggest); actual crediting always goes through buildDispatchManifest,
+// the one real gate — see the note on scanPalletArrivedForDirectDispatch's
+// earlier attempt at predicting that outcome here instead.
+function findDirectDispatchSalesOrderId(
+  state: Pick<WarehouseState, 'directDispatchApprovals' | 'pickTasks'>,
+  pallet: Pallet,
+): string | undefined {
+  if (pallet.productionDirectDispatchApprovalId) {
+    return state.directDispatchApprovals.find((a) => a.id === pallet.productionDirectDispatchApprovalId)
+      ?.salesOrderId;
+  }
+  return (
+    state.pickTasks.find(
+      (t) => t.origin === 'Storage' && t.directDispatch && t.items.some((i) => i.palletId === pallet.id),
+    )?.salesOrderId ?? undefined
+  );
+}
+
 // Shared by generateManifestForPickingComplete (Loader-triggered
 // generate/regenerate) and scanDispatchLine (Picker-triggered auto-refresh,
 // so a Picker is never blocked on a Loader clicking Regenerate Documents
@@ -283,25 +388,7 @@ function buildDispatchManifest(
   );
 
   // Find pallets that are either staged for dispatch, on bay, or in direct dispatch
-  const readyPallets = state.pallets.filter((p) => {
-    if (claimedPalletIdsByOtherTrucks.has(p.id)) return false;
-    const load = state.loads.find((l) => l.palletId === p.id);
-    if (!load || !so.lines.some((l) => l.sku === load.sku)) return false;
-
-    // Include staged pallets for this truck
-    if (p.status === 'StagedForDispatch' && p.location.type === 'DispatchLine') {
-      return (p.location as { truckId: string }).truckId === truckId;
-    }
-
-    // Include on-bay pallets that haven't been assigned to another truck yet
-    if (p.status === 'OnBay') return true;
-
-    // Direct dispatch pallets (bypassing bay staging) only count as ready
-    // once the picker has confirmed physical arrival at the loading bay
-    if (p.status === 'InTransitToTruck') return !!p.directDispatchArrivedAt;
-
-    return false;
-  });
+  const readyPallets = computeReadyPalletsForTruck(state, so, truckId, claimedPalletIdsByOtherTrucks);
 
   if (readyPallets.length === 0) return null;
 
@@ -313,27 +400,14 @@ function buildDispatchManifest(
   const claimedReleaseIds: string[] = [];
   let anyNewRelease = false;
   for (const line of so.lines) {
-    const linePallets = readyPallets.filter((p) => state.loads.find((l) => l.palletId === p.id)?.sku === line.sku);
-    const claimedByOtherOpenTrucks = state.dispatchVerifications
-      .filter((v) => v.salesOrderId === salesOrderId && v.truckId !== truckId && !v.dispatchLineScannedAt)
-      .flatMap((v) => v.products)
-      .filter((p) => p.sku === line.sku)
-      .reduce((sum, p) => sum + p.pickedQty, 0);
-    let remainingQty = Math.max(0, line.releasedQty - line.dispatchedQty - claimedByOtherOpenTrucks);
-    const lineSelected: Pallet[] = [];
-    for (const p of linePallets) {
-      if (remainingQty <= 0) break;
-      const load = state.loads.find((l) => l.palletId === p.id);
-      if (load) {
-        lineSelected.push(p);
-        remainingQty -= load.quantity;
-      }
-    }
-    selectedPallets.push(...lineSelected);
-    const linePickedQty = lineSelected.reduce(
-      (sum, p) => sum + (state.loads.find((l) => l.palletId === p.id)?.quantity ?? 0),
-      0,
+    const { selected: lineSelected, pickedQty: linePickedQty } = selectReadyPalletsForLine(
+      state,
+      readyPallets,
+      salesOrderId,
+      truckId,
+      line,
     );
+    selectedPallets.push(...lineSelected);
     if (line.releasedQty > 0 || linePickedQty > 0) {
       products.push({
         sku: line.sku,
@@ -601,6 +675,9 @@ interface WarehouseState {
   // Direct-dispatch pallets (InTransitToTruck) skip bay staging entirely —
   // this is their one loading-bay checkpoint: confirm physical arrival,
   // no destination rack scan, then the picker takes it straight to dispatch.
+  // Crediting toward an actual truck is decided later, at
+  // buildDispatchManifest/scanDispatchLine time — the Loader's release is
+  // what gates that, not this scan.
   scanPalletArrivedForDirectDispatch: (args: {
     palletId: string;
     operatorId: string;
@@ -1693,16 +1770,20 @@ export const useWarehouseStore = create<WarehouseState>()(
         }
         if (pallet.holdId) return err(`Pallet ${palletId} is on hold — cannot move until the hold is released`);
 
-        const load = state.loads.find((l) => l.palletId === palletId);
-        const matchedApproval = load
-          ? state.directDispatchApprovals.find((a) => {
-              if (a.sku !== load.sku || a.status !== 'Approved') return false;
-              const so = state.salesOrders.find((s) => s.id === a.salesOrderId);
-              return !!so && so.assignedTruckIds.length > 0;
-            })
-          : undefined;
-        const matchedSo = matchedApproval
-          ? state.salesOrders.find((s) => s.id === matchedApproval.salesOrderId)
+        // Deliberately no "is there room" prediction here (an earlier version
+        // tried, to auto-fall-back to bay storage when the Loader hadn't
+        // released enough yet — see git history). That required re-deriving
+        // buildDispatchManifest's per-truck selection outside of a real
+        // truck/manifest context, which repeatedly produced false negatives
+        // (a placeholder "no truck yet" id can't be told apart from a truck
+        // this exact order already has, double-charging its own pallets).
+        // buildDispatchManifest/scanDispatchLine remain the one real gate:
+        // this just confirms physical arrival: a pallet only gets credited
+        // once the Loader has actually released enough, whenever that scan
+        // happens, regardless of arrival order.
+        const matchedSalesOrderId = findDirectDispatchSalesOrderId(state, pallet);
+        const matchedSo = matchedSalesOrderId
+          ? state.salesOrders.find((s) => s.id === matchedSalesOrderId)
           : undefined;
         // Display-only hint for the toast below — the real truck attribution
         // happens later at document-generation time (see
@@ -2606,13 +2687,30 @@ export const useWarehouseStore = create<WarehouseState>()(
           creditedQtyBySku[sku] = (creditedQtyBySku[sku] ?? 0) + delta;
         }
 
+        // This very scan is what moves refreshed.palletIds from
+        // InTransitToTruck to StagedForDispatch (see the `set()` below) —
+        // compute that update up front so the readiness check below sees
+        // pallets as they'll be AFTER this scan credits them, not as they
+        // were before it. Checking against the pre-scan state would mean the
+        // one scan that actually finishes a truck's direct-dispatch portion
+        // could never itself be the one to flip the truck to 'Staged'.
+        const palletsAfterThisScan = state.pallets.map((p) =>
+          refreshed.palletIds.includes(p.id) && p.status === 'InTransitToTruck'
+            ? {
+                ...p,
+                status: 'StagedForDispatch' as const,
+                location: { type: 'DispatchLine' as const, dispatchLine: truck.dispatchLine, truckId: truck.id },
+              }
+            : p,
+        );
+
         // Only close this truck out — freeing it and stopping further
         // credit — once every task/approval feeding its manifest has
         // actually arrived. Otherwise leave it open so the next picker who
         // finishes their own task can scan in their portion too.
         const fullyReady = truckDispatchFullyReady(
           state.pickTasks,
-          state.pallets,
+          palletsAfterThisScan,
           state.directDispatchApprovals,
           salesOrderId,
           truck.id,
@@ -2630,12 +2728,7 @@ export const useWarehouseStore = create<WarehouseState>()(
           dispatchVerifications: existingVerification
             ? state.dispatchVerifications.map((v) => (v.id === updated.id ? updated : v))
             : [...state.dispatchVerifications, updated],
-          pallets: state.pallets.map((p) => {
-            if (refreshed.palletIds.includes(p.id) && p.status === 'InTransitToTruck') {
-              return { ...p, status: 'StagedForDispatch', location: { type: 'DispatchLine', dispatchLine: truck.dispatchLine, truckId: truck.id } };
-            }
-            return p;
-          }),
+          pallets: palletsAfterThisScan,
           salesOrderReleases: claimedReleaseIds.length
             ? state.salesOrderReleases.map((r) =>
                 claimedReleaseIds.includes(r.id) ? { ...r, includedInDocument: true } : r,

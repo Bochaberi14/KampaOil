@@ -639,12 +639,16 @@ function LineReleasePanel({
   // via an approved Direct Dispatch request (Sales HOD), so this never lets
   // the Loader type in a quantity the store will just reject anyway.
   const bayAvailForCap = availableOnBay(line.sku);
-  const incomingApproved = directDispatchApprovals
-    .filter((a: any) => a.salesOrderId === order.id && a.lineId === line.id && a.status === 'Approved')
-    .reduce((sum: number, a: any) => {
-      if (a.source === 'Storage') return sum + a.shortfallQty;
-      return sum + (a.palletsRemaining ?? 0) * unitsPerPallet(line.sku);
-    }, 0);
+  const approvedLineApprovals = directDispatchApprovals.filter(
+    (a: any) => a.salesOrderId === order.id && a.lineId === line.id && a.status === 'Approved',
+  );
+  const incomingFromStorage = approvedLineApprovals
+    .filter((a: any) => a.source === 'Storage')
+    .reduce((sum: number, a: any) => sum + a.shortfallQty, 0);
+  const incomingFromProduction = approvedLineApprovals
+    .filter((a: any) => a.source === 'Production')
+    .reduce((sum: number, a: any) => sum + (a.palletsRemaining ?? 0) * unitsPerPallet(line.sku), 0);
+  const incomingApproved = incomingFromStorage + incomingFromProduction;
   const releasableNow = Math.min(remainingToRelease, bayAvailForCap + incomingApproved);
 
   if (remainingToRelease <= 0) {
@@ -805,6 +809,12 @@ function LineReleasePanel({
             <p className="font-semibold mb-1">Pickers will source from:</p>
             <p>• Loading Bay: {bayAvail.toLocaleString()} units available</p>
             <p>• Storage: {storageAvail.toLocaleString()} units available</p>
+            {incomingFromStorage > 0 && (
+              <p>• Incoming direct dispatch from Storage: {incomingFromStorage.toLocaleString()} units</p>
+            )}
+            {incomingFromProduction > 0 && (
+              <p>• Incoming direct dispatch from Production: {incomingFromProduction.toLocaleString()} units</p>
+            )}
             {releaseQty && (
               <p className="text-slate-200 font-medium mt-1">
                 For {needed.toLocaleString()} units: {fromBay.toLocaleString()} from Bay

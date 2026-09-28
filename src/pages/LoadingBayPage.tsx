@@ -21,6 +21,7 @@ export function LoadingBayPage() {
   const actionReturnDecision = useWarehouseStore((s) => s.actionReturnDecision);
   const requestStockFromStorageToLoadingBay = useWarehouseStore((s) => s.requestStockFromStorageToLoadingBay);
   const placePalletInBay = useWarehouseStore((s) => s.placePalletInBay);
+  const scanPalletLeavingLine = useWarehouseStore((s) => s.scanPalletLeavingLine);
   const scanPalletArrivedForDirectDispatch = useWarehouseStore((s) => s.scanPalletArrivedForDirectDispatch);
   const executeDispatchPicking = useWarehouseStore((s) => s.executeDispatchPicking);
   const pushToast = useWarehouseStore((s) => s.pushToast);
@@ -56,6 +57,12 @@ export function LoadingBayPage() {
   // still need one arrival scan at the bay before heading to dispatch.
   const palletsAwaitingDirectDispatchArrival = useWarehouseStore((s) => s.pallets).filter(
     (p) => p.status === 'InTransitToTruck' && !p.directDispatchArrivedAt,
+  );
+  // Still-'Loaded' Production Direct pallets that haven't had their
+  // leaving-the-line scan yet — the candidates for the ad-hoc bay scan below,
+  // so the picker gets a suggestion instead of typing the id blind.
+  const palletsAwaitingLineDeparture = useWarehouseStore((s) => s.pallets).filter(
+    (p) => p.status === 'Loaded' && p.location.type !== 'Line' && !!p.productionDirectDispatchApprovalId,
   );
   const isLoadingBayPicker = currentUser ? isPickerLocationMatch(currentUser.id, 'loading-bay') : false;
   const nextPalletToReceive = palletsInTransitToBay[0] ?? palletsAwaitingDirectDispatchArrival[0];
@@ -139,14 +146,55 @@ export function LoadingBayPage() {
   function handleScanPalletArriving(palletId: string) {
     if (!currentUser) return;
 
+    const scannedPallet = pallets.find((p) => p.id === palletId);
+    if (!scannedPallet) {
+      pushToast(`❌ Pallet ${palletId} not found`, 'error');
+      return;
+    }
+
+    // A pallet still sitting at 'Loaded' hasn't had its "leaving the line"
+    // scan yet. Rather than requiring that first scan to happen at Storage,
+    // allow it here too — this is the primary path for a Production Direct
+    // pallet, which is meant to skip Storage entirely. If it turns out not
+    // to be direct after all, redirect the picker to Storage instead of
+    // silently absorbing a pallet this screen has no business receiving.
+    if (scannedPallet.status === 'Loaded') {
+      if (scannedPallet.location.type === 'Line') {
+        pushToast(`❌ Pallet ${palletId} is still at production — cannot scan here`, 'error');
+        return;
+      }
+      const leavingResult = scanPalletLeavingLine(palletId, currentUser.id);
+      if (!leavingResult.ok) {
+        pushToast(leavingResult.error, 'error');
+        return;
+      }
+      const afterLeaving = useWarehouseStore.getState().pallets.find((p) => p.id === palletId);
+      if (afterLeaving?.status !== 'InTransitToTruck') {
+        pushToast(
+          `❌ Pallet ${palletId} is not a direct-dispatch pallet — take it to Storage instead`,
+          'error',
+        );
+        return;
+      }
+      const arrivalResult = scanPalletArrivedForDirectDispatch({ palletId, operatorId: currentUser.id });
+      if (!arrivalResult.ok) {
+        pushToast(arrivalResult.error, 'error');
+        return;
+      }
+      setLastDirectDispatchArrival({ palletId, dispatchLine: arrivalResult.data.dispatchLine });
+      setWizard({ step: 'bay-arriving', palletId: null, palletIndex: 0, bayRackId: null });
+      return;
+    }
+
     // nextPalletToReceive is the only source of "what to expect here" — it's
     // read straight off the pallet's own status (InTransitToBay /
     // InTransitToTruck), so it can never point at a pallet that's still
     // sitting racked in storage. Releasing it from the rack is the Storage
     // page's job (its own picking workflow, scanRackForPick); this screen
     // only ever receives a pallet that's already left — whether from a
-    // normal Storage pick, or straight off the line for a Production
-    // Direct pallet (scanPalletLeavingLine already routed it here).
+    // normal Storage pick, straight off the line for a Production Direct
+    // pallet scanned here just above, or one scanned off the line at
+    // Storage instead (scanPalletLeavingLine already routed it here).
     const expectedPalletId = nextPalletToReceive?.id;
     if (!expectedPalletId) return;
 
@@ -155,11 +203,9 @@ export function LoadingBayPage() {
       return;
     }
 
-    const scannedPallet = pallets.find((p) => p.id === palletId);
-
     // Direct dispatch (Storage): confirm arrival only — no destination
     // rack, take it straight to dispatch instead.
-    if (scannedPallet?.status === 'InTransitToTruck') {
+    if (scannedPallet.status === 'InTransitToTruck') {
       const result = scanPalletArrivedForDirectDispatch({ palletId, operatorId: currentUser.id });
       if (!result.ok) {
         pushToast(result.error, 'error');
@@ -426,7 +472,7 @@ export function LoadingBayPage() {
         </div>
       )}
 
-      {isLoadingBayPicker && (nextPalletToReceive || lastDirectDispatchArrival) && (
+      {isLoadingBayPicker && (
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="text-lg font-semibold text-slate-200">Intake Workflow</h2>
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
@@ -468,6 +514,22 @@ export function LoadingBayPage() {
               </>
             );
           })()}
+
+          {wizard.step === 'bay-arriving' && !nextPalletToReceive && (
+            <>
+              <p className="text-sm text-slate-300">
+                {palletsAwaitingLineDeparture.length > 0
+                  ? `Expecting a Production Direct pallet — scan to confirm arrival straight from the line (no staging).`
+                  : 'No pallet currently expected here — scan a Production Direct pallet\'s barcode to confirm its arrival straight from the line. (A normal Storage pallet should be scanned at Storage instead.)'}
+              </p>
+              <ScanInput
+                label="Scan pallet arriving at loading bay"
+                placeholder="e.g. PLT-005"
+                onScan={handleScanPalletArriving}
+                suggestions={palletsAwaitingLineDeparture.map((p) => p.id)}
+              />
+            </>
+          )}
 
           {wizard.step === 'bay-staging' && wizard.palletId && (() => {
             const pallet = pallets.find((p) => p.id === wizard.palletId);
